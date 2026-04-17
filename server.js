@@ -11,7 +11,8 @@ const server = http.createServer(app);
 // Step 3: Attach Socket.IO to the SAME HTTP server with simple CORS config
 const io = new Server(server, {
   cors: {
-    origin: "*"
+    origin: "*",
+    methods: ["GET", "POST"]
   }
 });
 
@@ -29,7 +30,7 @@ function generateRoomId() {
 
 // Step 6: Listen for Socket.IO connections
 io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
+  console.log("Client connected:", socket.id);
 
   // Create room
   socket.on("create-room", () => {

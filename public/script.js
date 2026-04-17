@@ -570,6 +570,14 @@ sendFileBtn.addEventListener("click", () => {
 // -----------------------------
 // SOCKET EVENTS
 // -----------------------------
+socket.on("connect", () => {
+  console.log("Connected to server");
+});
+
+socket.on("connect_error", (err) => {
+  console.log("Connection error:", err.message);
+});
+
 socket.on("room-created", (roomId) => {
   currentRoomId = roomId;
   roomDisplay.innerHTML = `Room ID: <strong>${roomId}</strong>`;
