@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SuperPeer - P2P File Sharing</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Entry loading screen (shown for ~1.2s on page load) -->
+  <div id="loadingScreen" class="loading-screen">
+    <h1>SuperPeer</h1>
+    <p>Initializing secure connection...</p>
+    <span class="spinner loading-spinner"></span>
+  </div>
+
+  <div id="appCard" class="card app-hidden">
+    <div class="card-header">
+      <div>
+        <h1>SuperPeer</h1>
+        <p class="subtitle">Secure P2P File Sharing</p>
+      </div>
+      <button id="themeToggleBtn" class="theme-toggle-btn" type="button">🌙</button>
+    </div>
+
+    <!-- STEP 0: Entry screen -->
+    <div id="entryScreen" class="wizard-screen active">
+      <h2>Choose Mode</h2>
+      <p class="helper-text">How would you like to continue?</p>
+      <button id="sendModeBtn" class="btn btn-green">Send File</button>
+      <button id="receiveModeBtn" class="btn btn-blue">Receive File</button>
+    </div>
+
+    <!-- SEND FLOW - STEP 1 -->
+    <div id="sendCreateScreen" class="wizard-screen">
+      <h2>Step 1: Create Room</h2>
+      <button id="createRoomBtn" class="btn btn-green">Create Room</button>
+      <div class="room-id-row">
+        <p id="roomDisplay">Room ID: <strong>Not created yet</strong></p>
+        <button id="copyRoomBtn" class="copy-btn" type="button" disabled>Copy</button>
+      </div>
+    </div>
+
+    <!-- SEND FLOW - STEP 2 -->
+    <div id="sendWaitingScreen" class="wizard-screen">
+      <h2>Step 2: Waiting</h2>
+      <div class="room-id-row">
+        <p id="waitingRoomDisplay">Room ID: <strong>Not created yet</strong></p>
+        <button id="waitingCopyRoomBtn" class="copy-btn" type="button" disabled>Copy</button>
+      </div>
+      <div class="state-box">
+        <span class="spinner"></span>
+        <span id="waitingText">Waiting for receiver</span><span id="waitingDots">.</span>
+      </div>
+    </div>
+
+    <!-- RECEIVE FLOW - STEP 1 -->
+    <div id="receiveJoinScreen" class="wizard-screen">
+      <h2>Step 1: Join Room</h2>
+      <input id="roomInput" type="text" placeholder="Enter Room ID" />
+      <button id="joinRoomBtn" class="btn btn-blue">Connect to Room</button>
+    </div>
+
+    <!-- RECEIVE FLOW - STEP 2 -->
+    <div id="receiveConnectingScreen" class="wizard-screen">
+      <h2>Step 2: Connecting</h2>
+      <div class="state-box">
+        <span class="spinner"></span>
+        <span>Connecting securely...</span>
+      </div>
+    </div>
+
+    <!-- STEP 3 (shared): Connected + transfer -->
+    <div id="transferScreen" class="wizard-screen">
+      <h2 id="transferTitle">Step 3: Connected</h2>
+
+      <!-- Visible only in send flow -->
+      <div id="sendControls">
+        <input id="fileInput" type="file" />
+        <p id="selectedFileName">📄 Select a file to start sharing</p>
+        <button id="sendFileBtn" class="btn btn-green">Send File</button>
+      </div>
+
+      <!-- Visible only in receive flow -->
+      <div id="receiveInfo" class="hidden-block">
+        <p class="helper-text">Ready to receive. Waiting for sender to start transfer.</p>
+      </div>
+
+      <p id="fileStatusText">File Status: idle</p>
+      <div class="progress-track">
+        <div id="fileProgressFill" class="progress-fill"></div>
+        <span id="fileProgressValue" class="progress-value">0%</span>
+      </div>
+      <p id="fileProgressText">Transfer progress: 0%</p>
+    </div>
+
+    <p id="statusText"></p>
+  </div>
+
+  <!-- Center popup for connection success -->
+  <div id="successPopup" class="success-popup hidden-block">
+    <span id="successLoader" class="spinner loading-spinner"></span>
+    <h3 id="successTitle">Connecting...</h3>
+    <p id="successSubtext">Securing peer link...</p>
+  </div>
+
+  <div id="toastContainer" class="toast-container"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
