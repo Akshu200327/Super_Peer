@@ -70,6 +70,7 @@ const receiveInfoText = document.getElementById("receiveInfoText");
 const fileInputContainer = document.getElementById("fileInputContainer");
 const fileInput = document.getElementById("fileInput");
 const selectedFileName = document.getElementById("selectedFileName");
+const filePreviewList = document.getElementById("filePreviewList");
 const sendFileBtn = document.getElementById("sendFileBtn");
 const fileStatusText = document.getElementById("fileStatusText");
 const fileProgressFill = document.getElementById("fileProgressFill");
@@ -97,6 +98,7 @@ const BUFFER_PAUSE_THRESHOLD = 1024 * 1024; // 1MB
 const BUFFER_LOW_THRESHOLD = 64 * 1024; // 64KB
 const LARGE_FILE_WARNING_SIZE = 200 * 1024 * 1024; // 200MB
 const EXTREME_FILE_BLOCK_SIZE = 500 * 1024 * 1024; // 500MB
+const EMPTY_FILE_PROMPT = "Drag & drop files or click to browse";
 let incomingFileInfo = null;
 let receivedChunks = [];
 let receivedBytes = 0;
@@ -225,7 +227,8 @@ function showConnectedStep() {
     }
     sendControls.classList.remove("hidden-block");
     receiveInfo.classList.add("hidden-block");
-    selectedFileName.textContent = "📄 Select a file to start sharing";
+    selectedFileName.textContent = EMPTY_FILE_PROMPT;
+    renderFilePreview([]);
     setCurrentTransferFile("Current file: none");
     if (sendFileBtn) {
       sendFileBtn.disabled = true;
@@ -247,6 +250,7 @@ function showConnectedStep() {
       logMissingElement("receiveInfoText");
     }
     selectedFileName.textContent = "Receiving: waiting for file...";
+    renderFilePreview([]);
     setCurrentTransferFile("Current file: waiting for sender");
     if (sendFileBtn) {
       sendFileBtn.disabled = true;
@@ -284,9 +288,13 @@ function resetTransferUi() {
   if (!selectedFileName) {
     logMissingElement("selectedFileName");
   } else if (currentFlow === "send") {
-    selectedFileName.textContent = "📄 Select a file to start sharing";
+    selectedFileName.textContent = EMPTY_FILE_PROMPT;
   } else {
     selectedFileName.textContent = "Receiving: waiting for file...";
+  }
+  renderFilePreview([]);
+  if (fileInputContainer) {
+    fileInputContainer.classList.remove("drag-active");
   }
 
   updateSendFileButtonState();
@@ -448,6 +456,15 @@ function formatFileSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+function getFileTypeIcon(file) {
+  const fileType = String(file.type || "").toLowerCase();
+  const fileName = String(file.name || "").toLowerCase();
+  if (fileType.startsWith("image/")) return "🖼️";
+  if (fileType.startsWith("video/")) return "🎬";
+  if (fileType === "application/pdf" || fileName.endsWith(".pdf")) return "📄";
+  return "📁";
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -507,6 +524,84 @@ function renderTransferList() {
       `
     )
     .join("");
+}
+
+function renderFilePreview(files) {
+  if (!filePreviewList) {
+    logMissingElement("filePreviewList");
+    return;
+  }
+
+  const fileList = Array.from(files || []);
+  if (fileList.length === 0) {
+    filePreviewList.innerHTML = `<p class="file-preview-empty">${escapeHtml(EMPTY_FILE_PROMPT)}</p>`;
+    return;
+  }
+
+  filePreviewList.innerHTML = fileList
+    .map(
+      (file) => `
+        <div class="file-item file-preview-item">
+          <div class="file-item-head">
+            <span class="file-item-name">${getFileTypeIcon(file)} ${escapeHtml(file.name)}</span>
+            <span class="file-item-size">${formatFileSize(file.size)}</span>
+          </div>
+        </div>
+      `
+    )
+    .join("");
+}
+
+function processSelectedFiles(files) {
+  const fileList = Array.from(files || []);
+  renderFilePreview(fileList);
+
+  if (fileList.length > 0) {
+    const { hasLargeWarning, blockedFile } = validateSelectedFiles(fileList, false);
+    hasBlockedLargeFile = !!blockedFile;
+
+    const firstFileName = fileList[0].name;
+    const remainingCount = fileList.length - 1;
+    if (remainingCount > 0) {
+      selectedFileName.textContent = `Sending: ${firstFileName} (+${remainingCount} more)`;
+    } else {
+      selectedFileName.textContent = "Sending: " + firstFileName;
+    }
+    if (hasBlockedLargeFile) {
+      fileStatusText.textContent = `File Status: ${blockedFile.name} is too large. Max allowed is 500MB`;
+      showToast("Extremely large file is blocked", "error");
+    } else if (hasLargeWarning) {
+      fileStatusText.textContent = "Large file may fail on unstable networks";
+      showToast("Large file may fail on unstable networks", "info");
+    } else {
+      fileStatusText.textContent = `File Status: Ready to send ${fileList.length} file(s)`;
+    }
+
+    transferItems = fileList.map((file) => ({
+      name: file.name,
+      size: file.size,
+      progress: 0,
+      status: file.size > EXTREME_FILE_BLOCK_SIZE ? "Blocked: too large" : "Pending"
+    }));
+    totalTransferBytes = transferItems.reduce((sum, item) => sum + item.size, 0);
+    totalTransferredBytes = 0;
+    renderTransferList();
+    updateTotalProgressText();
+    setCurrentTransferFile("Current file: none");
+  } else {
+    selectedFileName.textContent = EMPTY_FILE_PROMPT;
+    fileStatusText.textContent = "File Status: idle";
+    hasBlockedLargeFile = false;
+    transferItems = [];
+    totalTransferBytes = 0;
+    totalTransferredBytes = 0;
+    renderTransferList();
+    updateTotalProgressText();
+    setCurrentTransferFile("Current file: none");
+  }
+
+  setProgress(0);
+  updateSendFileButtonState();
 }
 
 function updateTransferItemProgress(itemIndex, progress, status) {
@@ -1029,52 +1124,53 @@ addSafeListener(fileInput, "fileInput", "change", () => {
     }
     return;
   }
+  processSelectedFiles(fileInput.files);
+});
 
-  if (fileInput.files.length > 0) {
-    const { hasLargeWarning, blockedFile } = validateSelectedFiles(fileInput.files, false);
-    hasBlockedLargeFile = !!blockedFile;
+addSafeListener(fileInputContainer, "fileInputContainer", "click", (event) => {
+  if (userRole !== "sender") return;
+  if (event.target === fileInput) return;
+  fileInput.click();
+});
 
-    const firstFileName = fileInput.files[0].name;
-    const remainingCount = fileInput.files.length - 1;
-    if (remainingCount > 0) {
-      selectedFileName.textContent = `Sending: ${firstFileName} (+${remainingCount} more)`;
-    } else {
-      selectedFileName.textContent = "Sending: " + firstFileName;
-    }
-    if (hasBlockedLargeFile) {
-      fileStatusText.textContent = `File Status: ${blockedFile.name} is too large. Max allowed is 500MB`;
-      showToast("Extremely large file is blocked", "error");
-    } else if (hasLargeWarning) {
-      fileStatusText.textContent = "Large file may fail on unstable networks";
-      showToast("Large file may fail on unstable networks", "info");
-    } else {
-      fileStatusText.textContent = `File Status: Ready to send ${fileInput.files.length} file(s)`;
-    }
-
-    transferItems = Array.from(fileInput.files).map((file) => ({
-      name: file.name,
-      size: file.size,
-      progress: 0,
-      status: file.size > EXTREME_FILE_BLOCK_SIZE ? "Blocked: too large" : "Pending"
-    }));
-    totalTransferBytes = transferItems.reduce((sum, item) => sum + item.size, 0);
-    totalTransferredBytes = 0;
-    renderTransferList();
-    updateTotalProgressText();
-    setCurrentTransferFile("Current file: none");
-  } else {
-    selectedFileName.textContent = "📄 Select a file to start sharing";
-    fileStatusText.textContent = "File Status: idle";
-    hasBlockedLargeFile = false;
-    transferItems = [];
-    totalTransferBytes = 0;
-    totalTransferredBytes = 0;
-    renderTransferList();
-    updateTotalProgressText();
-    setCurrentTransferFile("Current file: none");
+addSafeListener(fileInputContainer, "fileInputContainer", "keydown", (event) => {
+  if (userRole !== "sender") return;
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    fileInput.click();
   }
-  setProgress(0);
-  updateSendFileButtonState();
+});
+
+addSafeListener(fileInputContainer, "fileInputContainer", "dragover", (event) => {
+  if (userRole !== "sender") return;
+  event.preventDefault();
+  fileInputContainer.classList.add("drag-active");
+});
+
+addSafeListener(fileInputContainer, "fileInputContainer", "dragleave", (event) => {
+  if (userRole !== "sender") return;
+  if (fileInputContainer.contains(event.relatedTarget)) return;
+  fileInputContainer.classList.remove("drag-active");
+});
+
+addSafeListener(fileInputContainer, "fileInputContainer", "drop", (event) => {
+  if (userRole !== "sender") return;
+  event.preventDefault();
+  fileInputContainer.classList.remove("drag-active");
+  const droppedFiles = event.dataTransfer ? event.dataTransfer.files : null;
+  if (!droppedFiles || droppedFiles.length === 0) return;
+
+  if (typeof DataTransfer === "function") {
+    const dataTransfer = new DataTransfer();
+    Array.from(droppedFiles).forEach((file) => {
+      dataTransfer.items.add(file);
+    });
+    fileInput.files = dataTransfer.files;
+  } else {
+    return;
+  }
+
+  processSelectedFiles(fileInput.files);
 });
 
 addSafeListener(sendFileBtn, "sendFileBtn", "click", async () => {

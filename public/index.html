@@ -90,10 +90,13 @@
 
       <!-- Visible only in send flow -->
       <div id="sendControls">
-        <div id="fileInputContainer">
-          <label class="input-label" for="fileInput">Choose File</label>
+        <div id="fileInputContainer" class="drop-zone" role="button" tabindex="0" aria-label="Upload files">
+          <label class="input-label" for="fileInput">Drop files here</label>
           <input id="fileInput" type="file" multiple />
-          <p id="selectedFileName">📄 Select a file to start sharing</p>
+          <p id="selectedFileName">Drag &amp; drop files or click to browse</p>
+          <div id="filePreviewList" class="file-preview-list">
+            <p class="file-preview-empty">Drag &amp; drop files or click to browse</p>
+          </div>
         </div>
         <button id="sendFileBtn" class="btn btn-green">Send File</button>
       </div>

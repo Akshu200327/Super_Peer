@@ -234,15 +234,11 @@ input:focus {
   font-size: 14px;
   font-weight: 700;
   cursor: pointer;
-  transition:
-    transform 0.22s ease,
-    box-shadow 0.22s ease,
-    filter 0.22s ease,
-    opacity 0.22s ease;
+  transition: all 0.3s ease;
 }
 
 .btn:hover:not(:disabled) {
-  transform: translateY(-2px);
+  transform: translateY(-2px) scale(1.05);
   filter: brightness(1.06);
   box-shadow: 0 12px 26px rgba(56, 189, 248, 0.22);
 }
@@ -333,6 +329,7 @@ button:disabled {
   background: rgba(15, 23, 42, 0.34);
   border-radius: 10px;
   padding: 10px;
+  transition: all 0.3s ease;
 }
 
 .file-item-head {
@@ -412,7 +409,50 @@ button:disabled {
   background: linear-gradient(100deg, #3b82f6 0%, #6366f1 45%, #22c55e 100%);
   background-size: 200% 100%;
   animation: progress-flow 2.4s linear infinite;
-  transition: width 0.35s ease;
+  transition: all 0.3s ease;
+}
+
+.drop-zone {
+  border: 2px dashed rgba(255, 255, 255, 0.3);
+  padding: 20px;
+  border-radius: 12px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.drop-zone .input-label {
+  margin-bottom: 4px;
+}
+
+#fileInputContainer #fileInput {
+  display: none;
+}
+
+.drag-active {
+  border-color: #00ffcc;
+  background: rgba(0, 255, 204, 0.1);
+}
+
+.file-preview-list {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.file-preview-empty {
+  margin: 0;
+  font-size: 13px;
+  color: #cbd5ff;
+}
+
+.file-preview-item {
+  padding: 8px;
+  margin-top: 6px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  animation: file-fade-in 0.25s ease;
 }
 
 .progress-value {
@@ -576,6 +616,17 @@ button:disabled {
   }
 }
 
+@keyframes file-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @keyframes toast-in {
   from {
     opacity: 0;
@@ -721,6 +772,24 @@ body:not(.dark-mode) .state-box {
 body:not(.dark-mode) .file-item {
   border-color: rgba(148, 163, 184, 0.35);
   background: rgba(255, 255, 255, 0.62);
+}
+
+body:not(.dark-mode) .drop-zone {
+  border-color: rgba(148, 163, 184, 0.5);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+body:not(.dark-mode) .drag-active {
+  border-color: #0d9488;
+  background: rgba(20, 184, 166, 0.15);
+}
+
+body:not(.dark-mode) .file-preview-empty {
+  color: #475569;
+}
+
+body:not(.dark-mode) .file-preview-item {
+  background: rgba(241, 245, 249, 0.95);
 }
 
 body:not(.dark-mode) .file-item-head {
