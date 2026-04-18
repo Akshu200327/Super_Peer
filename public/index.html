@@ -108,10 +108,15 @@
           <span class="spinner"></span>
           <span id="sendingAnimationText">Transferring files...</span>
         </div>
+        <p id="transferMetaText" class="helper-text hidden-block"></p>
         <div id="fileTransferList" class="file-transfer-list hidden-block"></div>
         <div id="totalProgressTrack" class="progress-track hidden-block">
           <div id="totalProgressFill" class="progress-fill"></div>
           <span id="totalProgressValue" class="progress-value">0%</span>
+        </div>
+        <div class="transfer-action-row">
+          <button id="cancelTransferBtn" class="btn btn-blue hidden-block" type="button">Cancel Transfer</button>
+          <button id="retryTransferBtn" class="btn btn-green hidden-block" type="button">Retry</button>
         </div>
       </div>
 

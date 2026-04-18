@@ -80,6 +80,9 @@ const fileTransferList = document.getElementById("fileTransferList");
 const totalProgressTrack = document.getElementById("totalProgressTrack");
 const totalProgressFill = document.getElementById("totalProgressFill");
 const totalProgressValue = document.getElementById("totalProgressValue");
+const transferMetaText = document.getElementById("transferMetaText");
+const cancelTransferBtn = document.getElementById("cancelTransferBtn");
+const retryTransferBtn = document.getElementById("retryTransferBtn");
 
 // -----------------------------
 // APP STATE
@@ -112,19 +115,32 @@ let hasBlockedLargeFile = false;
 let transferItems = [];
 let totalTransferredBytes = 0;
 let totalTransferBytes = 0;
+let transferStartedAt = 0;
+let isTransferCancelled = false;
+let manualRetryContext = null;
 const TRANSFER_UI_STATES = {
-  MODE_SELECTION: "mode-selection",
   CONNECTED: "connected",
   FILES_SELECTED: "files-selected",
   SENDING: "sending",
-  COMPLETED: "completed"
+  RECEIVING: "receiving",
+  COMPLETED: "completed",
+  ERROR: "error"
 };
-let transferUiState = TRANSFER_UI_STATES.MODE_SELECTION;
+const MAX_FILE_RETRIES = 2;
+let transferUiState = TRANSFER_UI_STATES.CONNECTED;
 
-// STUN config
-const rtcConfig = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-};
+const DEFAULT_ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
+
+async function getIceServers() {
+  try {
+    const res = await fetch("/turn-credentials");
+    const data = await res.json();
+    return data.iceServers;
+  } catch (err) {
+    console.warn("TURN failed, using STUN fallback");
+    return DEFAULT_ICE_SERVERS;
+  }
+}
 
 // -----------------------------
 // THEME
@@ -226,7 +242,7 @@ function showConnectedStep() {
     }
   } else {
     transferTitle.textContent = "Receiving files...";
-    setTransferStatus("Waiting for sender...");
+    setTransferStatus("");
     setTransferUiState(TRANSFER_UI_STATES.CONNECTED);
     if (sendFileBtn) {
       sendFileBtn.disabled = true;
@@ -250,11 +266,16 @@ function resetTransferUi() {
   transferItems = [];
   totalTransferredBytes = 0;
   totalTransferBytes = 0;
+  transferStartedAt = 0;
+  manualRetryContext = null;
+  isTransferCancelled = false;
   setProgress(0);
+  setTransferMetaText("");
+  setSendButtonLoading(false);
   renderTransferList();
   updateTotalProgressUi();
-  setTransferStatus(userRole === "receiver" && isPeerConnected ? "Waiting for sender..." : "");
-  setTransferUiState(isPeerConnected ? TRANSFER_UI_STATES.CONNECTED : TRANSFER_UI_STATES.MODE_SELECTION);
+  setTransferStatus("");
+  setTransferUiState(TRANSFER_UI_STATES.CONNECTED);
   renderFilePreview([]);
   if (fileInputContainer) {
     fileInputContainer.classList.remove("drag-active");
@@ -392,6 +413,57 @@ function setInlineStatus(text) {
   statusText.textContent = text || "";
 }
 
+function setTransferMetaText(text) {
+  if (!transferMetaText) {
+    logMissingElement("transferMetaText");
+    return;
+  }
+  transferMetaText.textContent = text || "";
+  transferMetaText.classList.toggle("hidden-block", !text);
+}
+
+function formatSpeed(bytesPerSecond) {
+  if (!bytesPerSecond || !Number.isFinite(bytesPerSecond)) return "0 KB/s";
+  if (bytesPerSecond < 1024 * 1024) {
+    return `${(bytesPerSecond / 1024).toFixed(1)} KB/s`;
+  }
+  return `${(bytesPerSecond / (1024 * 1024)).toFixed(2)} MB/s`;
+}
+
+function formatEta(seconds) {
+  if (!seconds || !Number.isFinite(seconds)) return "--";
+  return `${Math.max(0, Math.ceil(seconds))} sec`;
+}
+
+function recalculateTotalTransferredBytes() {
+  totalTransferredBytes = transferItems.reduce(
+    (sum, item) => sum + (Number.isFinite(item.transferredBytes) ? item.transferredBytes : 0),
+    0
+  );
+}
+
+function updateTransferMeta() {
+  if (!transferStartedAt || totalTransferBytes <= 0) {
+    setTransferMetaText("");
+    return;
+  }
+
+  const elapsedSeconds = Math.max(1, (Date.now() - transferStartedAt) / 1000);
+  const speedBytesPerSecond = totalTransferredBytes / elapsedSeconds;
+  const remainingBytes = Math.max(0, totalTransferBytes - totalTransferredBytes);
+  const etaSeconds = speedBytesPerSecond > 0 ? remainingBytes / speedBytesPerSecond : 0;
+  setTransferMetaText(`Speed: ${formatSpeed(speedBytesPerSecond)} • ETA: ${formatEta(etaSeconds)}`);
+}
+
+function setSendButtonLoading(loading) {
+  if (!sendFileBtn) {
+    logMissingElement("sendFileBtn");
+    return;
+  }
+  sendFileBtn.textContent = loading ? "Sending" : "Send File";
+  sendFileBtn.classList.toggle("btn-loading", loading);
+}
+
 function setTransferUiState(nextState) {
   transferUiState = nextState;
 
@@ -404,7 +476,10 @@ function setTransferUiState(nextState) {
   const isSender = userRole === "sender";
   const showConnectedPanel = isSender && nextState === TRANSFER_UI_STATES.CONNECTED;
   const showPreviewPanel = isSender && nextState === TRANSFER_UI_STATES.FILES_SELECTED;
-  const showProgressPanel = nextState === TRANSFER_UI_STATES.SENDING;
+  const showProgressPanel =
+    nextState === TRANSFER_UI_STATES.SENDING ||
+    nextState === TRANSFER_UI_STATES.RECEIVING ||
+    nextState === TRANSFER_UI_STATES.ERROR;
   const showCompletedPanel = nextState === TRANSFER_UI_STATES.COMPLETED;
 
   if (sendControls) {
@@ -439,6 +514,23 @@ function setTransferUiState(nextState) {
     logMissingElement("sendFileBtn");
   }
 
+  if (cancelTransferBtn) {
+    const shouldShowCancel =
+      nextState === TRANSFER_UI_STATES.SENDING || nextState === TRANSFER_UI_STATES.RECEIVING;
+    cancelTransferBtn.classList.toggle("hidden-block", !shouldShowCancel);
+    cancelTransferBtn.disabled = !shouldShowCancel;
+  } else {
+    logMissingElement("cancelTransferBtn");
+  }
+
+  if (retryTransferBtn) {
+    const shouldShowRetry = nextState === TRANSFER_UI_STATES.ERROR && !!manualRetryContext;
+    retryTransferBtn.classList.toggle("hidden-block", !shouldShowRetry);
+    retryTransferBtn.disabled = !shouldShowRetry || isSendingFiles;
+  } else {
+    logMissingElement("retryTransferBtn");
+  }
+
   if (completionMessage) {
     completionMessage.textContent = userRole === "sender" ? "Files sent successfully." : "Files received successfully.";
   } else {
@@ -446,13 +538,20 @@ function setTransferUiState(nextState) {
   }
 
   if (sendingAnimationText) {
-    sendingAnimationText.textContent = userRole === "sender" ? "Sending files..." : "Receiving files...";
+    if (nextState === TRANSFER_UI_STATES.ERROR) {
+      sendingAnimationText.textContent = "Transfer failed";
+    } else if (nextState === TRANSFER_UI_STATES.RECEIVING) {
+      sendingAnimationText.textContent = "Receiving files...";
+    } else {
+      sendingAnimationText.textContent = "Sending files...";
+    }
   } else {
     logMissingElement("sendingAnimationText");
   }
 
   renderTransferList();
   updateTotalProgressUi();
+  updateTransferMeta();
 }
 
 // "Waiting for receiver..." dots animation
@@ -519,7 +618,10 @@ function updateTotalProgressUi() {
   }
 
   const hasTransfer = totalTransferBytes > 0;
-  const allowVisible = transferUiState === TRANSFER_UI_STATES.SENDING;
+  const allowVisible =
+    transferUiState === TRANSFER_UI_STATES.SENDING ||
+    transferUiState === TRANSFER_UI_STATES.RECEIVING ||
+    transferUiState === TRANSFER_UI_STATES.ERROR;
   totalProgressTrack.classList.toggle("hidden-block", !allowVisible || !hasTransfer);
 
   if (!hasTransfer) {
@@ -543,7 +645,10 @@ function renderTransferList() {
   }
 
   const hasItems = transferItems.length > 0;
-  const allowVisible = transferUiState === TRANSFER_UI_STATES.SENDING;
+  const allowVisible =
+    transferUiState === TRANSFER_UI_STATES.SENDING ||
+    transferUiState === TRANSFER_UI_STATES.RECEIVING ||
+    transferUiState === TRANSFER_UI_STATES.ERROR;
   fileTransferList.classList.toggle("hidden-block", !hasItems || !allowVisible);
 
   if (!hasItems) {
@@ -617,7 +722,8 @@ function processSelectedFiles(files) {
       name: file.name,
       size: file.size,
       progress: 0,
-      status: file.size > EXTREME_FILE_BLOCK_SIZE ? "Blocked: too large" : "Pending"
+      status: file.size > EXTREME_FILE_BLOCK_SIZE ? "Blocked: too large" : "Pending",
+      transferredBytes: 0
     }));
     totalTransferBytes = transferItems.reduce((sum, item) => sum + item.size, 0);
     totalTransferredBytes = 0;
@@ -639,7 +745,13 @@ function updateTransferItemProgress(itemIndex, progress, status) {
   if (!item) return;
   item.progress = progress;
   item.status = status;
+  if (!Number.isFinite(item.transferredBytes)) {
+    item.transferredBytes = 0;
+  }
+  recalculateTotalTransferredBytes();
   renderTransferList();
+  updateTotalProgressUi();
+  updateTransferMeta();
 }
 
 function validateSelectedFiles(files, showMessages) {
@@ -682,14 +794,19 @@ function updateSendFileButtonState() {
   }
 
   const hasFile = fileInput.files && fileInput.files.length > 0;
+  const isChannelReady = !!dataChannel && dataChannel.readyState === "open";
+  const isTransferBusy =
+    transferUiState === TRANSFER_UI_STATES.SENDING || transferUiState === TRANSFER_UI_STATES.RECEIVING;
   sendFileBtn.disabled =
     !(
       userRole === "sender" &&
       currentFlow === "send" &&
       hasFile &&
-      isPeerConnected
+      isPeerConnected &&
+      isChannelReady
     ) ||
     isSendingFiles ||
+    isTransferBusy ||
     hasBlockedLargeFile;
 }
 
@@ -712,8 +829,11 @@ function setJoinRoomButtonDisabled(disabled) {
 // -----------------------------
 // WEBRTC + DATACHANNEL
 // -----------------------------
-function createPeerConnection() {
-  peerConnection = new RTCPeerConnection(rtcConfig);
+async function createPeerConnection() {
+  const iceServers = await getIceServers();
+  peerConnection = new RTCPeerConnection({
+    iceServers: iceServers
+  });
 
   // Receiver gets data channel from sender
   peerConnection.ondatachannel = (event) => {
@@ -768,9 +888,8 @@ function setupDataChannelEvents(channel) {
     URL.revokeObjectURL(url);
 
     setInlineStatus("");
-    setTransferStatus("Receiving files...");
+    setTransferStatus("");
     updateTransferItemProgress(completedFileInfo.fileIndex - 1, 100, "Received");
-    updateTotalProgressUi();
     showToast("File received", "success");
 
     incomingFileInfo = null;
@@ -779,16 +898,27 @@ function setupDataChannelEvents(channel) {
     incomingFileMarkedComplete = false;
 
     if (completedFileInfo.fileIndex >= completedFileInfo.totalFiles) {
-      setTransferStatus("Completed");
+      setTransferStatus("");
+      setTransferMetaText("");
       setTransferUiState(TRANSFER_UI_STATES.COMPLETED);
     }
   }
 
   channel.onopen = () => {
+    isTransferCancelled = false;
     updateSendFileButtonState();
   };
 
   channel.onclose = () => {
+    if (
+      !isTransferCancelled &&
+      (transferUiState === TRANSFER_UI_STATES.SENDING ||
+        transferUiState === TRANSFER_UI_STATES.RECEIVING)
+    ) {
+      setInlineStatus("Connection lost");
+      setTransferUiState(TRANSFER_UI_STATES.ERROR);
+      showToast("Connection lost", "error");
+    }
     updateSendFileButtonState();
   };
 
@@ -802,12 +932,26 @@ function setupDataChannelEvents(channel) {
         return;
       }
 
+      if (meta && meta.type === "transfer-cancelled") {
+        incomingFileInfo = null;
+        receivedChunks = [];
+        receivedBytes = 0;
+        incomingFileMarkedComplete = false;
+        setTransferStatus("");
+        setTransferMetaText("");
+        setInlineStatus("Transfer cancelled");
+        setTransferUiState(TRANSFER_UI_STATES.CONNECTED);
+        updateSendFileButtonState();
+        return;
+      }
+
       if (meta && meta.type === "file-meta") {
         const isFirstIncomingFile = (meta.fileIndex || 1) === 1;
         if (isFirstIncomingFile) {
           transferItems = [];
           totalTransferredBytes = 0;
           totalTransferBytes = 0;
+          transferStartedAt = Date.now();
         }
 
         incomingFileInfo = {
@@ -819,18 +963,20 @@ function setupDataChannelEvents(channel) {
         receivedChunks = [];
         receivedBytes = 0;
         incomingFileMarkedComplete = false;
-        setTransferStatus("Receiving files...");
+        setTransferStatus(`Receiving: ${incomingFileInfo.name}`);
         setInlineStatus("");
-        setTransferUiState(TRANSFER_UI_STATES.SENDING);
+        setTransferUiState(TRANSFER_UI_STATES.RECEIVING);
         transferItems.push({
           name: incomingFileInfo.name,
           size: incomingFileInfo.size,
           progress: 0,
-          status: "Receiving"
+          status: "Receiving",
+          transferredBytes: 0
         });
         totalTransferBytes += incomingFileInfo.size;
         renderTransferList();
         updateTotalProgressUi();
+        updateTransferMeta();
         return;
       }
 
@@ -861,9 +1007,11 @@ function setupDataChannelEvents(channel) {
       100,
       Math.floor((receivedBytes / incomingFileInfo.size) * 100)
     );
+    const receivingItem = transferItems[incomingFileInfo.fileIndex - 1];
+    if (receivingItem) {
+      receivingItem.transferredBytes = receivedBytes;
+    }
     updateTransferItemProgress(incomingFileInfo.fileIndex - 1, receivePercent, "Receiving");
-    totalTransferredBytes += chunkBuffer.byteLength;
-    updateTotalProgressUi();
 
     // Complete file when full data is received and sender marks last chunk done
     if (receivedBytes >= incomingFileInfo.size && incomingFileMarkedComplete) {
@@ -880,7 +1028,15 @@ function waitForBufferedAmountLow(channel) {
     }
 
     const previousHandler = channel.onbufferedamountlow;
+    const watcher = setInterval(() => {
+      if (!channel || channel.readyState !== "open") {
+        clearInterval(watcher);
+        channel.onbufferedamountlow = previousHandler;
+        resolve();
+      }
+    }, 120);
     channel.onbufferedamountlow = () => {
+      clearInterval(watcher);
       channel.onbufferedamountlow = previousHandler;
       if (typeof previousHandler === "function") {
         previousHandler();
@@ -1009,7 +1165,127 @@ addSafeListener(roomInput, "roomInput", "keydown", (event) => {
   }
 });
 
+function closeDataChannelSafely() {
+  if (!dataChannel) return;
+  try {
+    if (dataChannel.readyState !== "closed") {
+      dataChannel.close();
+    }
+  } catch (error) {
+    console.warn("Data channel close failed:", error.message);
+  }
+}
+
+function rebuildSenderDataChannel() {
+  if (userRole !== "sender" || !peerConnection || peerConnection.connectionState !== "connected") {
+    return;
+  }
+  dataChannel = peerConnection.createDataChannel("file");
+  setupDataChannelEvents(dataChannel);
+}
+
+function waitForDataChannelOpen(channel, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    if (!channel) {
+      reject(new Error("Connection lost"));
+      return;
+    }
+    if (channel.readyState === "open") {
+      resolve();
+      return;
+    }
+
+    let timeoutId = null;
+    const handleOpen = () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      channel.removeEventListener("open", handleOpen);
+      channel.removeEventListener("close", handleClose);
+      resolve();
+    };
+    const handleClose = () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      channel.removeEventListener("open", handleOpen);
+      channel.removeEventListener("close", handleClose);
+      reject(new Error("Connection lost"));
+    };
+
+    channel.addEventListener("open", handleOpen, { once: true });
+    channel.addEventListener("close", handleClose, { once: true });
+    timeoutId = setTimeout(() => {
+      channel.removeEventListener("open", handleOpen);
+      channel.removeEventListener("close", handleClose);
+      reject(new Error("Connection lost"));
+    }, timeoutMs);
+  });
+}
+
+async function ensureSenderDataChannelReady() {
+  if (userRole !== "sender") return;
+  if (!peerConnection || peerConnection.connectionState !== "connected") {
+    throw new Error("Connection lost");
+  }
+  if (!dataChannel || dataChannel.readyState === "closed" || dataChannel.readyState === "closing") {
+    rebuildSenderDataChannel();
+  }
+  await waitForDataChannelOpen(dataChannel);
+}
+
+async function cancelTransfer() {
+  if (
+    transferUiState !== TRANSFER_UI_STATES.SENDING &&
+    transferUiState !== TRANSFER_UI_STATES.RECEIVING
+  ) {
+    return;
+  }
+
+  isTransferCancelled = true;
+  isSendingFiles = false;
+  manualRetryContext = null;
+  transferStartedAt = 0;
+  setSendButtonLoading(false);
+
+  if (dataChannel && dataChannel.readyState === "open") {
+    try {
+      dataChannel.send(JSON.stringify({ type: "transfer-cancelled" }));
+    } catch (error) {
+      console.warn("Failed to send cancel event:", error.message);
+    }
+  }
+
+  closeDataChannelSafely();
+  rebuildSenderDataChannel();
+
+  incomingFileInfo = null;
+  receivedChunks = [];
+  receivedBytes = 0;
+  incomingFileMarkedComplete = false;
+  setTransferStatus("");
+  setTransferMetaText("");
+  setInlineStatus("Transfer cancelled");
+  setTransferUiState(TRANSFER_UI_STATES.CONNECTED);
+  updateSendFileButtonState();
+  showToast("Transfer cancelled", "info");
+}
+
 async function sendSingleFile(file, fileIndex, totalFiles) {
+  if (isTransferCancelled) {
+    throw new Error("Transfer cancelled");
+  }
+
+  await ensureSenderDataChannelReady();
+  const item = transferItems[fileIndex - 1];
+  if (item) {
+    item.transferredBytes = 0;
+  }
+  recalculateTotalTransferredBytes();
+  setTransferStatus(`Sending: ${file.name}`);
+  setTransferUiState(TRANSFER_UI_STATES.SENDING);
+  updateTransferItemProgress(fileIndex - 1, 0, "Sending");
+
+  if (!transferStartedAt) {
+    transferStartedAt = Date.now();
+  }
+
   dataChannel.send(
     JSON.stringify({
       type: "file-meta",
@@ -1020,16 +1296,23 @@ async function sendSingleFile(file, fileIndex, totalFiles) {
     })
   );
 
-  setTransferStatus("Sending files...");
-  setInlineStatus("");
-  setTransferUiState(TRANSFER_UI_STATES.SENDING);
-  updateTransferItemProgress(fileIndex - 1, 0, "Sending");
-  updateTotalProgressUi();
-
   let sentBytes = 0;
   for (let offset = 0; offset < file.size; offset += CHUNK_SIZE) {
+    if (isTransferCancelled) {
+      throw new Error("Transfer cancelled");
+    }
+    if (!dataChannel || dataChannel.readyState !== "open") {
+      throw new Error("Connection lost");
+    }
+
     while (dataChannel.bufferedAmount > BUFFER_PAUSE_THRESHOLD) {
       await waitForBufferedAmountLow(dataChannel);
+      if (isTransferCancelled) {
+        throw new Error("Transfer cancelled");
+      }
+      if (!dataChannel || dataChannel.readyState !== "open") {
+        throw new Error("Connection lost");
+      }
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
 
@@ -1038,16 +1321,19 @@ async function sendSingleFile(file, fileIndex, totalFiles) {
     dataChannel.send(chunk);
     sentBytes += chunk.byteLength;
 
+    if (item) {
+      item.transferredBytes = sentBytes;
+    }
     const sendPercent = Math.min(100, Math.floor((sentBytes / file.size) * 100));
     updateTransferItemProgress(fileIndex - 1, sendPercent, "Sending");
-    totalTransferredBytes += chunk.byteLength;
-    updateTotalProgressUi();
-
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
 
   updateTransferItemProgress(fileIndex - 1, 100, "Sent");
 
+  if (!dataChannel || dataChannel.readyState !== "open") {
+    throw new Error("Connection lost");
+  }
   dataChannel.send(
     JSON.stringify({
       type: "file-complete",
@@ -1057,6 +1343,80 @@ async function sendSingleFile(file, fileIndex, totalFiles) {
       totalFiles
     })
   );
+}
+
+async function sendSingleFileWithRetry(file, fileIndex, totalFiles) {
+  let retryCount = 0;
+  while (retryCount <= MAX_FILE_RETRIES) {
+    try {
+      await sendSingleFile(file, fileIndex, totalFiles);
+      return;
+    } catch (error) {
+      if (isTransferCancelled) {
+        throw error;
+      }
+
+      if (retryCount < MAX_FILE_RETRIES) {
+        retryCount += 1;
+        updateTransferItemProgress(fileIndex - 1, 0, `Retrying... (${retryCount}/${MAX_FILE_RETRIES})`);
+        setInlineStatus(`Retrying... (${retryCount}/${MAX_FILE_RETRIES})`);
+        showToast(`Retrying... (${retryCount}/${MAX_FILE_RETRIES})`, "info");
+        await ensureSenderDataChannelReady();
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        continue;
+      }
+
+      throw error;
+    }
+  }
+}
+
+async function runSendQueue(filesToSend, startIndex = 0) {
+  isSendingFiles = true;
+  isTransferCancelled = false;
+  manualRetryContext = null;
+  setSendButtonLoading(true);
+  setInlineStatus("");
+  setTransferUiState(TRANSFER_UI_STATES.SENDING);
+  updateSendFileButtonState();
+  recalculateTotalTransferredBytes();
+  updateTransferMeta();
+
+  if (!transferStartedAt) {
+    transferStartedAt = Date.now();
+  }
+
+  let failedIndex = -1;
+  try {
+    await ensureSenderDataChannelReady();
+    for (let index = startIndex; index < filesToSend.length; index += 1) {
+      failedIndex = index;
+      await sendSingleFileWithRetry(filesToSend[index], index + 1, filesToSend.length);
+    }
+
+    setTransferStatus("");
+    setTransferMetaText("");
+    setInlineStatus("");
+    setTransferUiState(TRANSFER_UI_STATES.COMPLETED);
+    showToast("File sent successfully", "success");
+    return true;
+  } catch (error) {
+    if (isTransferCancelled) {
+      return false;
+    }
+
+    const retryStartIndex = failedIndex >= 0 ? failedIndex : startIndex;
+    manualRetryContext = { files: filesToSend, startIndex: retryStartIndex };
+    setTransferStatus("");
+    setInlineStatus("Transfer failed");
+    setTransferUiState(TRANSFER_UI_STATES.ERROR);
+    showToast(error.message === "Connection lost" ? "Connection lost" : "Transfer failed", "error");
+    return false;
+  } finally {
+    isSendingFiles = false;
+    setSendButtonLoading(false);
+    updateSendFileButtonState();
+  }
 }
 
 async function sendFiles(files) {
@@ -1082,44 +1442,20 @@ async function sendFiles(files) {
     return;
   }
 
-  if (!dataChannel || dataChannel.readyState !== "open") {
-    setInlineStatus("Secure link is still connecting");
-    return;
-  }
+  transferItems = filesToSend.map((file) => ({
+    name: file.name,
+    size: file.size,
+    progress: 0,
+    status: "Pending",
+    transferredBytes: 0
+  }));
 
-  if (transferItems.length === 0) {
-    transferItems = filesToSend.map((file) => ({
-      name: file.name,
-      size: file.size,
-      progress: 0,
-      status: "Pending"
-    }));
-    renderTransferList();
-  }
   totalTransferBytes = filesToSend.reduce((sum, file) => sum + file.size, 0);
   totalTransferredBytes = 0;
+  transferStartedAt = Date.now();
+  renderTransferList();
   updateTotalProgressUi();
-
-  isSendingFiles = true;
-  setTransferStatus("Sending files...");
-  setInlineStatus("");
-  setTransferUiState(TRANSFER_UI_STATES.SENDING);
-  updateSendFileButtonState();
-
-  try {
-    for (let index = 0; index < filesToSend.length; index += 1) {
-      const file = filesToSend[index];
-      await sendSingleFile(file, index + 1, filesToSend.length);
-    }
-
-    setTransferStatus("Completed");
-    setInlineStatus("");
-    setTransferUiState(TRANSFER_UI_STATES.COMPLETED);
-    showToast("File sent successfully", "success");
-  } finally {
-    isSendingFiles = false;
-    updateSendFileButtonState();
-  }
+  await runSendQueue(filesToSend, 0);
 }
 
 // -----------------------------
@@ -1187,6 +1523,15 @@ addSafeListener(sendFileBtn, "sendFileBtn", "click", async () => {
   await sendFiles(fileInput.files);
 });
 
+addSafeListener(cancelTransferBtn, "cancelTransferBtn", "click", async () => {
+  await cancelTransfer();
+});
+
+addSafeListener(retryTransferBtn, "retryTransferBtn", "click", async () => {
+  if (!manualRetryContext) return;
+  await runSendQueue(manualRetryContext.files, manualRetryContext.startIndex);
+});
+
 addSafeListener(resetTransferBtn, "resetTransferBtn", "click", () => {
   resetTransferUi();
   setInlineStatus("");
@@ -1232,7 +1577,7 @@ socket.on("peer-joined", async () => {
   // Only creator sends offer
   if (!isCreator) return;
 
-  createPeerConnection();
+  await createPeerConnection();
 
   // Sender creates DataChannel
   dataChannel = peerConnection.createDataChannel("file");
@@ -1249,7 +1594,7 @@ socket.on("peer-joined", async () => {
 
 socket.on("offer", async (offer) => {
   if (!peerConnection) {
-    createPeerConnection();
+    await createPeerConnection();
   }
 
   await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
@@ -1329,6 +1674,6 @@ setTimeout(() => {
 }, 1200);
 
 // Initial safe state
-setTransferUiState(TRANSFER_UI_STATES.MODE_SELECTION);
+setTransferUiState(TRANSFER_UI_STATES.CONNECTED);
 renderFilePreview([]);
 updateSendFileButtonState();

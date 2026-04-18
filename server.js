@@ -1,8 +1,11 @@
+require("dotenv").config();
+
 // Step 1: Import required packages
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const path = require("path");
+const twilio = require("twilio");
 
 // Step 2: Create Express app and HTTP server
 const app = express();
@@ -19,7 +22,28 @@ const io = new Server(server, {
 // Step 4: Serve static files from the "public" folder
 app.use(express.static(path.join(__dirname, "public")));
 
-// Step 5: Keep simple room details in memory (no database)
+// Step 5: Generate temporary TURN/STUN credentials using Twilio
+app.get("/turn-credentials", async (req, res) => {
+  try {
+    const client = twilio(
+      process.env.TWILIO_ACCOUNT_SID,
+      process.env.TWILIO_AUTH_TOKEN
+    );
+    const token = await client.tokens.create();
+    return res.json({
+      iceServers: token.iceServers.map((server) => ({
+        urls: server.urls || server.url,
+        username: server.username,
+        credential: server.credential
+      }))
+    });
+  } catch (err) {
+    console.error("TURN error:", err);
+    res.status(500).json({ error: "TURN fetch failed" });
+  }
+});
+
+// Step 6: Keep simple room details in memory (no database)
 // Example: rooms["ABC123"] = ["socketId1", "socketId2"]
 const rooms = {};
 
@@ -28,7 +52,7 @@ function generateRoomId() {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
-// Step 6: Listen for Socket.IO connections
+// Step 7: Listen for Socket.IO connections
 io.on("connection", (socket) => {
   console.log("Client connected:", socket.id);
 
@@ -104,7 +128,7 @@ io.on("connection", (socket) => {
   });
 });
 
-// Step 7: Start server (Render provides PORT through environment variable)
+// Step 8: Start server (Render provides PORT through environment variable)
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Server running on ${PORT}`);
