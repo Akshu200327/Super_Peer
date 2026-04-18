@@ -549,3 +549,133 @@ body.dark-mode {
     radial-gradient(circle at 55% 90%, rgba(20, 184, 166, 0.22), transparent 45%),
     linear-gradient(150deg, #040814 0%, #090f25 55%, #070b21 100%);
 }
+
+/* Light mode overrides */
+body:not(.dark-mode) {
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  background:
+    radial-gradient(circle at 15% 20%, rgba(96, 165, 250, 0.2), transparent 42%),
+    radial-gradient(circle at 85% 18%, rgba(167, 139, 250, 0.2), transparent 42%),
+    radial-gradient(circle at 50% 90%, rgba(34, 197, 94, 0.15), transparent 45%),
+    linear-gradient(145deg, #eef2ff 0%, #e0e7ff 45%, #f8fafc 100%);
+}
+
+body:not(.dark-mode)::before {
+  background: rgba(99, 102, 241, 0.2);
+}
+
+body:not(.dark-mode)::after {
+  background: rgba(56, 189, 248, 0.18);
+}
+
+body:not(.dark-mode) .loading-screen,
+body:not(.dark-mode) .card {
+  border-color: rgba(148, 163, 184, 0.35);
+  background: rgba(255, 255, 255, 0.62);
+  box-shadow:
+    0 16px 36px rgba(30, 41, 59, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+body:not(.dark-mode) .subtitle,
+body:not(.dark-mode) .helper-text,
+body:not(.dark-mode) #roomDisplay,
+body:not(.dark-mode) #selectedFileName,
+body:not(.dark-mode) #fileStatusText,
+body:not(.dark-mode) #fileProgressText,
+body:not(.dark-mode) #statusText,
+body:not(.dark-mode) .loading-screen p {
+  color: #475569;
+}
+
+body:not(.dark-mode) .wizard-screen {
+  border-top-color: rgba(148, 163, 184, 0.35);
+}
+
+body:not(.dark-mode) .menu-toggle-btn {
+  color: #1e293b;
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(148, 163, 184, 0.42);
+}
+
+body:not(.dark-mode) .header-menu {
+  background: rgba(255, 255, 255, 0.82);
+  border-color: rgba(148, 163, 184, 0.35);
+}
+
+body:not(.dark-mode) .menu-item-btn {
+  color: #0f172a;
+}
+
+body:not(.dark-mode) .menu-item-btn:hover {
+  background: rgba(99, 102, 241, 0.12);
+}
+
+body:not(.dark-mode) .menu-danger-btn {
+  color: #dc2626;
+}
+
+body:not(.dark-mode) .input-label {
+  color: #334155;
+}
+
+body:not(.dark-mode) input {
+  background: rgba(255, 255, 255, 0.74);
+  color: #0f172a;
+  border-color: rgba(148, 163, 184, 0.44);
+}
+
+body:not(.dark-mode) input::placeholder {
+  color: #64748b;
+}
+
+body:not(.dark-mode) input:focus {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(79, 70, 229, 0.65);
+}
+
+body:not(.dark-mode) .copy-btn {
+  color: #0f172a;
+  background: rgba(255, 255, 255, 0.74);
+  border-color: rgba(148, 163, 184, 0.42);
+}
+
+body:not(.dark-mode) .state-box {
+  background: rgba(219, 234, 254, 0.72);
+  border-color: rgba(96, 165, 250, 0.5);
+  color: #1e3a8a;
+}
+
+body:not(.dark-mode) .spinner {
+  border-color: rgba(96, 165, 250, 0.35);
+  border-top-color: #2563eb;
+}
+
+body:not(.dark-mode) .progress-track {
+  border-color: rgba(148, 163, 184, 0.36);
+  background: linear-gradient(90deg, rgba(226, 232, 240, 0.95), rgba(203, 213, 225, 0.92));
+}
+
+body:not(.dark-mode) .progress-value {
+  color: #ffffff;
+}
+
+body:not(.dark-mode) .connection-error-box {
+  border-color: rgba(239, 68, 68, 0.42);
+  background: rgba(254, 242, 242, 0.85);
+}
+
+body:not(.dark-mode) #connectionErrorText {
+  color: #b91c1c;
+}
+
+body:not(.dark-mode) .success-popup {
+  border-color: rgba(148, 163, 184, 0.4);
+  background: rgba(255, 255, 255, 0.86);
+  color: #0f172a;
+}
+
+body:not(.dark-mode) .success-popup p {
+  color: #475569;
+}

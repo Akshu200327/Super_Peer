@@ -25,10 +25,6 @@ const toastContainer = document.getElementById("toastContainer");
 const statusText = document.getElementById("statusText");
 const loadingScreen = document.getElementById("loadingScreen");
 const appCard = document.getElementById("appCard");
-const successPopup = document.getElementById("successPopup");
-const successLoader = document.getElementById("successLoader");
-const successTitle = document.getElementById("successTitle");
-const successSubtext = document.getElementById("successSubtext");
 const connectionErrorBox = document.getElementById("connectionErrorBox");
 const connectionErrorText = document.getElementById("connectionErrorText");
 const retryConnectionBtn = document.getElementById("retryConnectionBtn");
@@ -94,7 +90,6 @@ let incomingFileInfo = null;
 let receivedChunks = [];
 let receivedBytes = 0;
 let waitingDotsTimer = null;
-let successPopupTimers = [];
 let connectionTimeoutTimer = null;
 let retryRoomId = null;
 let transferDirectionText = "Progress";
@@ -229,8 +224,6 @@ function goToModeSelection() {
   stopWaitingDots();
   clearConnectionTimeout();
   hideConnectionFailure();
-  successPopup.classList.add("hidden-block");
-  successPopup.classList.remove("celebrate");
 
   if (dataChannel) {
     dataChannel.close();
@@ -335,36 +328,6 @@ function showToast(message, type = "info") {
   setTimeout(() => {
     toast.remove();
   }, 3000);
-}
-
-// Center popup after successful connection
-function showConnectionSuccessPopup() {
-  // Clear old timers first
-  successPopupTimers.forEach((timer) => clearTimeout(timer));
-  successPopupTimers = [];
-
-  successPopup.classList.remove("hidden-block");
-  successPopup.classList.remove("celebrate");
-
-  // Phase 1: short loading state
-  successLoader.style.display = "inline-block";
-  successTitle.textContent = "Connecting...";
-  successSubtext.textContent = "Securing peer link...";
-
-  const loadingToCelebrateTimer = setTimeout(() => {
-    // Phase 2: connected celebration
-    successLoader.style.display = "none";
-    successTitle.textContent = "🎉 Connected!";
-    successSubtext.textContent = "Secure connection established";
-    successPopup.classList.add("celebrate");
-  }, 650);
-
-  const hideTimer = setTimeout(() => {
-    successPopup.classList.add("hidden-block");
-    successPopup.classList.remove("celebrate");
-  }, 2000);
-
-  successPopupTimers.push(loadingToCelebrateTimer, hideTimer);
 }
 
 // "Waiting for receiver..." dots animation
