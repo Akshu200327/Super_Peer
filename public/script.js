@@ -98,8 +98,12 @@ let dataChannel = null;
 
 // File transfer state (simple one-file flow)
 const CHUNK_SIZE = 64 * 1024; // 64KB
-const BUFFER_PAUSE_THRESHOLD = 1024 * 1024; // 1MB
-const BUFFER_LOW_THRESHOLD = 64 * 1024; // 64KB
+const BUFFER_PAUSE_THRESHOLD = 5 * 1024 * 1024; // 5MB
+const BUFFER_LOW_THRESHOLD = 2 * 1024 * 1024; // 2MB
+const DATA_CHANNEL_CONFIG = {
+  ordered: false,
+  maxRetransmits: 0
+};
 const LARGE_FILE_WARNING_SIZE = 200 * 1024 * 1024; // 200MB
 const EXTREME_FILE_BLOCK_SIZE = 500 * 1024 * 1024; // 500MB
 const EMPTY_FILE_PROMPT = "Drag & drop files or click to browse";
@@ -901,7 +905,7 @@ async function retryConnectionViaRelay(reason) {
     await createPeerConnection();
 
     if (isCreator) {
-      dataChannel = peerConnection.createDataChannel("file");
+      dataChannel = peerConnection.createDataChannel("file", DATA_CHANNEL_CONFIG);
       setupDataChannelEvents(dataChannel);
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
@@ -1333,7 +1337,7 @@ function rebuildSenderDataChannel() {
   if (userRole !== "sender" || !peerConnection || peerConnection.connectionState !== "connected") {
     return;
   }
-  dataChannel = peerConnection.createDataChannel("file");
+  dataChannel = peerConnection.createDataChannel("file", DATA_CHANNEL_CONFIG);
   setupDataChannelEvents(dataChannel);
 }
 
@@ -1466,7 +1470,7 @@ async function sendSingleFile(file, fileIndex, totalFiles) {
       if (!dataChannel || dataChannel.readyState !== "open") {
         throw new Error("Connection lost");
       }
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      await new Promise((resolve) => setTimeout(resolve, 1));
     }
 
     const chunkBlob = file.slice(offset, offset + CHUNK_SIZE);
@@ -1479,7 +1483,7 @@ async function sendSingleFile(file, fileIndex, totalFiles) {
     }
     const sendPercent = Math.min(100, Math.floor((sentBytes / file.size) * 100));
     updateTransferItemProgress(fileIndex - 1, sendPercent, "Sending");
-    await new Promise((resolve) => setTimeout(resolve, 2));
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
   updateTransferItemProgress(fileIndex - 1, 100, "Sent");
@@ -1733,7 +1737,7 @@ socket.on("peer-joined", async () => {
   await createPeerConnection();
 
   // Sender creates DataChannel
-  dataChannel = peerConnection.createDataChannel("file");
+  dataChannel = peerConnection.createDataChannel("file", DATA_CHANNEL_CONFIG);
   setupDataChannelEvents(dataChannel);
 
   const offer = await peerConnection.createOffer();
