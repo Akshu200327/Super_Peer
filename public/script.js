@@ -4,6 +4,18 @@ const socket = io();
 // -----------------------------
 // UI ELEMENTS
 // -----------------------------
+function logMissingElement(id) {
+  console.log("Element not found:", id);
+}
+
+function addSafeListener(element, id, eventName, handler) {
+  if (!element) {
+    logMissingElement(id);
+    return;
+  }
+  element.addEventListener(eventName, handler);
+}
+
 const menuToggleBtn = document.getElementById("menuToggleBtn");
 const headerMenu = document.getElementById("headerMenu");
 const menuModeBtn = document.getElementById("menuModeBtn");
@@ -92,30 +104,46 @@ const rtcConfig = {
 function applyTheme(theme) {
   if (theme === "dark") {
     document.body.classList.add("dark-mode");
-    menuThemeBtn.textContent = "Light Mode";
+    if (menuThemeBtn) {
+      menuThemeBtn.textContent = "Light Mode";
+    } else {
+      logMissingElement("menuThemeBtn");
+    }
   } else {
     document.body.classList.remove("dark-mode");
-    menuThemeBtn.textContent = "Dark Mode";
+    if (menuThemeBtn) {
+      menuThemeBtn.textContent = "Dark Mode";
+    } else {
+      logMissingElement("menuThemeBtn");
+    }
   }
 }
 
 const savedTheme = localStorage.getItem("superpeer-theme") || "light";
 applyTheme(savedTheme);
 
-menuThemeBtn.addEventListener("click", () => {
+addSafeListener(menuThemeBtn, "menuThemeBtn", "click", () => {
   const nextTheme = document.body.classList.contains("dark-mode") ? "light" : "dark";
   applyTheme(nextTheme);
   localStorage.setItem("superpeer-theme", nextTheme);
-  headerMenu.classList.add("hidden-block");
+  if (headerMenu) {
+    headerMenu.classList.add("hidden-block");
+  } else {
+    logMissingElement("headerMenu");
+  }
 });
 
 // Header menu open/close
-menuToggleBtn.addEventListener("click", () => {
-  headerMenu.classList.toggle("hidden-block");
+addSafeListener(menuToggleBtn, "menuToggleBtn", "click", () => {
+  if (headerMenu) {
+    headerMenu.classList.toggle("hidden-block");
+  } else {
+    logMissingElement("headerMenu");
+  }
 });
 
 document.addEventListener("click", (event) => {
-  if (!event.target.closest(".menu-wrapper")) {
+  if (!event.target.closest(".menu-wrapper") && headerMenu) {
     headerMenu.classList.add("hidden-block");
   }
 });
@@ -124,8 +152,17 @@ document.addEventListener("click", (event) => {
 // WIZARD HELPERS
 // -----------------------------
 function showScreen(screenElement) {
-  allScreens.forEach((screen) => screen.classList.remove("active"));
-  screenElement.classList.add("active");
+  allScreens.forEach((screen, index) => {
+    if (screen) {
+      screen.classList.remove("active");
+    } else {
+      logMissingElement(`wizard-screen-${index}`);
+    }
+  });
+
+  if (screenElement) {
+    screenElement.classList.add("active");
+  }
 
   // Animate dots only on sender waiting step
   if (screenElement === sendWaitingScreen) {
@@ -156,11 +193,21 @@ function showConnectedStep() {
 }
 
 function resetTransferUi() {
-  fileInput.value = "";
+  if (fileInput) {
+    fileInput.value = "";
+  } else {
+    logMissingElement("fileInput");
+  }
   setProgress(0);
-  fileStatusText.textContent = "File Status: idle";
+  if (fileStatusText) {
+    fileStatusText.textContent = "File Status: idle";
+  } else {
+    logMissingElement("fileStatusText");
+  }
 
-  if (currentFlow === "send") {
+  if (!selectedFileName) {
+    logMissingElement("selectedFileName");
+  } else if (currentFlow === "send") {
     selectedFileName.textContent = "📄 Select a file to start sharing";
   } else {
     selectedFileName.textContent = "Receiving: waiting for file...";
@@ -207,6 +254,11 @@ function goToModeSelection() {
 // TOAST + PROGRESS
 // -----------------------------
 function showToast(message) {
+  if (!toastContainer) {
+    logMissingElement("toastContainer");
+    return;
+  }
+
   const toast = document.createElement("div");
   toast.className = "toast";
   toast.textContent = message;
@@ -273,12 +325,33 @@ function stopWaitingDots() {
 
 function setProgress(percent) {
   const safePercent = Math.max(0, Math.min(100, percent));
-  fileProgressFill.style.width = safePercent + "%";
-  fileProgressValue.textContent = safePercent + "%";
-  fileProgressText.textContent = "Transfer progress: " + safePercent + "%";
+  if (fileProgressFill) {
+    fileProgressFill.style.width = safePercent + "%";
+  } else {
+    logMissingElement("fileProgressFill");
+  }
+  if (fileProgressValue) {
+    fileProgressValue.textContent = safePercent + "%";
+  } else {
+    logMissingElement("fileProgressValue");
+  }
+  if (fileProgressText) {
+    fileProgressText.textContent = "Transfer progress: " + safePercent + "%";
+  } else {
+    logMissingElement("fileProgressText");
+  }
 }
 
 function updateSendFileButtonState() {
+  if (!fileInput) {
+    logMissingElement("fileInput");
+    return;
+  }
+  if (!sendFileBtn) {
+    logMissingElement("sendFileBtn");
+    return;
+  }
+
   const hasFile = fileInput.files && fileInput.files.length > 0;
   sendFileBtn.disabled = !(currentFlow === "send" && hasFile && isPeerConnected);
 }
@@ -404,12 +477,16 @@ function setupDataChannelEvents(channel) {
 // -----------------------------
 // ENTRY SCREEN
 // -----------------------------
-menuModeBtn.addEventListener("click", () => {
+addSafeListener(menuModeBtn, "menuModeBtn", "click", () => {
   goToModeSelection();
-  headerMenu.classList.add("hidden-block");
+  if (headerMenu) {
+    headerMenu.classList.add("hidden-block");
+  } else {
+    logMissingElement("headerMenu");
+  }
 });
 
-disconnectBtn.addEventListener("click", () => {
+addSafeListener(disconnectBtn, "disconnectBtn", "click", () => {
   // Disconnect from signaling server, then reconnect for fresh state
   if (socket.connected) {
     socket.disconnect();
@@ -418,10 +495,14 @@ disconnectBtn.addEventListener("click", () => {
 
   goToModeSelection();
   showToast("Disconnected");
-  headerMenu.classList.add("hidden-block");
+  if (headerMenu) {
+    headerMenu.classList.add("hidden-block");
+  } else {
+    logMissingElement("headerMenu");
+  }
 });
 
-sendModeBtn.addEventListener("click", () => {
+addSafeListener(sendModeBtn, "sendModeBtn", "click", () => {
   currentFlow = "send";
   isCreator = true;
   currentRoomId = null;
@@ -433,7 +514,7 @@ sendModeBtn.addEventListener("click", () => {
   showScreen(sendCreateScreen);
 });
 
-receiveModeBtn.addEventListener("click", () => {
+addSafeListener(receiveModeBtn, "receiveModeBtn", "click", () => {
   currentFlow = "receive";
   isCreator = false;
   currentRoomId = null;
@@ -445,15 +526,15 @@ receiveModeBtn.addEventListener("click", () => {
 // -----------------------------
 // SEND FLOW
 // -----------------------------
-createRoomBtn.addEventListener("click", () => {
+addSafeListener(createRoomBtn, "createRoomBtn", "click", () => {
   socket.emit("create-room");
 });
 
-copyRoomBtn.addEventListener("click", async () => {
+addSafeListener(copyRoomBtn, "copyRoomBtn", "click", async () => {
   copyRoomId();
 });
 
-waitingCopyRoomBtn.addEventListener("click", async () => {
+addSafeListener(waitingCopyRoomBtn, "waitingCopyRoomBtn", "click", async () => {
   copyRoomId();
 });
 
@@ -477,7 +558,7 @@ async function copyRoomId() {
 // -----------------------------
 // RECEIVE FLOW
 // -----------------------------
-joinRoomBtn.addEventListener("click", () => {
+addSafeListener(joinRoomBtn, "joinRoomBtn", "click", () => {
   const roomId = roomInput.value.trim().toUpperCase();
   if (!roomId) {
     statusText.textContent = "Please enter a Room ID.";
@@ -489,7 +570,7 @@ joinRoomBtn.addEventListener("click", () => {
   statusText.textContent = "";
 });
 
-roomInput.addEventListener("keydown", (event) => {
+addSafeListener(roomInput, "roomInput", "keydown", (event) => {
   if (event.key === "Enter") {
     joinRoomBtn.click();
   }
@@ -498,7 +579,7 @@ roomInput.addEventListener("keydown", (event) => {
 // -----------------------------
 // FILE SEND ACTION (STEP 3 SEND)
 // -----------------------------
-fileInput.addEventListener("change", () => {
+addSafeListener(fileInput, "fileInput", "change", () => {
   if (fileInput.files.length > 0) {
     selectedFileName.textContent = "Sending: " + fileInput.files[0].name;
     fileStatusText.textContent = "File Status: ready to send";
@@ -510,7 +591,7 @@ fileInput.addEventListener("change", () => {
   updateSendFileButtonState();
 });
 
-sendFileBtn.addEventListener("click", () => {
+addSafeListener(sendFileBtn, "sendFileBtn", "click", () => {
   const file = fileInput.files[0];
   if (!file) {
     fileStatusText.textContent = "File Status: Please choose a file first";
@@ -646,8 +727,17 @@ socket.on("error-message", (message) => {
 
 // Show loading screen briefly before main wizard
 setTimeout(() => {
-  loadingScreen.classList.add("hidden-block");
-  appCard.classList.remove("app-hidden");
+  if (loadingScreen) {
+    loadingScreen.classList.add("hidden-block");
+  } else {
+    logMissingElement("loadingScreen");
+  }
+
+  if (appCard) {
+    appCard.classList.remove("app-hidden");
+  } else {
+    logMissingElement("appCard");
+  }
 }, 1200);
 
 // Initial safe state

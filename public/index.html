@@ -14,14 +14,21 @@
     <span class="spinner loading-spinner"></span>
   </div>
 
-  <div id="appCard" class="card app-hidden">
-    <div class="card-header">
-      <div>
-        <h1>SuperPeer</h1>
-        <p class="subtitle">Secure P2P File Sharing</p>
+    <div id="appCard" class="card app-hidden">
+      <div class="card-header">
+        <div>
+          <h1>SuperPeer</h1>
+          <p class="subtitle">Secure P2P File Sharing</p>
+        </div>
+        <div class="menu-wrapper">
+          <button id="menuToggleBtn" class="menu-toggle-btn" type="button">☰</button>
+          <div id="headerMenu" class="header-menu hidden-block">
+            <button id="menuModeBtn" class="menu-item-btn" type="button">Choose Mode</button>
+            <button id="menuThemeBtn" class="menu-item-btn" type="button">Dark Mode</button>
+            <button id="disconnectBtn" class="menu-item-btn menu-danger-btn" type="button">Disconnect</button>
+          </div>
+        </div>
       </div>
-      <button id="themeToggleBtn" class="theme-toggle-btn" type="button">🌙</button>
-    </div>
 
     <!-- STEP 0: Entry screen -->
     <div id="entryScreen" class="wizard-screen active">
