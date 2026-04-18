@@ -680,3 +680,156 @@ body:not(.dark-mode) .success-popup {
 body:not(.dark-mode) .success-popup p {
   color: #475569;
 }
+
+/* Responsive optimization */
+@media (min-width: 1200px) {
+  .card,
+  .loading-screen {
+    width: 460px;
+    max-width: 90vw;
+  }
+}
+
+@media (max-width: 991px) {
+  body {
+    padding: 16px;
+  }
+
+  .card,
+  .loading-screen {
+    width: min(560px, 94vw);
+    padding: 24px;
+  }
+
+  .toast-container {
+    top: 14px;
+    right: 14px;
+  }
+}
+
+@media (max-width: 768px) {
+  body {
+    align-items: flex-start;
+    padding: 12px;
+  }
+
+  body::before,
+  body::after {
+    width: 300px;
+    height: 300px;
+    filter: blur(55px);
+  }
+
+  .card,
+  .loading-screen {
+    width: 100%;
+    max-width: 100%;
+    border-radius: 16px;
+    padding: 18px;
+  }
+
+  .card {
+    max-height: calc(100vh - 24px);
+  }
+
+  .card-header {
+    margin-bottom: 14px;
+  }
+
+  h1 {
+    font-size: 22px;
+  }
+
+  h2 {
+    font-size: 17px;
+  }
+
+  .room-id-row {
+    align-items: stretch;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .copy-btn {
+    min-height: 38px;
+  }
+
+  .btn {
+    min-height: 44px;
+    padding: 12px;
+  }
+
+  .header-menu {
+    width: 168px;
+  }
+
+  .toast-container {
+    top: 12px;
+    right: 12px;
+    left: 12px;
+    align-items: stretch;
+  }
+
+  .toast {
+    min-width: 0;
+    max-width: none;
+  }
+}
+
+@media (max-width: 480px) {
+  body {
+    padding: 10px;
+  }
+
+  .card,
+  .loading-screen {
+    padding: 14px;
+    border-radius: 14px;
+  }
+
+  h1 {
+    font-size: 20px;
+  }
+
+  h2 {
+    font-size: 16px;
+    margin-bottom: 10px;
+  }
+
+  .subtitle,
+  .helper-text,
+  .input-label,
+  #roomDisplay,
+  #selectedFileName,
+  #fileStatusText,
+  #fileProgressText,
+  #statusText {
+    font-size: 12px;
+  }
+
+  .room-id-row {
+    flex-direction: column;
+  }
+
+  .copy-btn {
+    width: 100%;
+  }
+
+  .menu-toggle-btn {
+    width: 38px;
+    height: 38px;
+  }
+
+  .header-menu {
+    width: 160px;
+    top: 42px;
+  }
+
+  .progress-track {
+    height: 14px;
+  }
+
+  .progress-value {
+    font-size: 9px;
+  }
+}
