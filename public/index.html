@@ -64,6 +64,7 @@
     <!-- RECEIVE FLOW - STEP 1 -->
     <div id="receiveJoinScreen" class="wizard-screen">
       <h2>Step 1: Join Room</h2>
+      <label class="input-label" for="roomInput">Room ID</label>
       <input id="roomInput" type="text" placeholder="Enter Room ID" />
       <button id="joinRoomBtn" class="btn btn-blue">Connect to Room</button>
     </div>
@@ -77,12 +78,18 @@
       </div>
     </div>
 
+    <div id="connectionErrorBox" class="connection-error-box hidden-block">
+      <p id="connectionErrorText">Connection failed. Try again.</p>
+      <button id="retryConnectionBtn" class="btn btn-blue" type="button">Retry</button>
+    </div>
+
     <!-- STEP 3 (shared): Connected + transfer -->
     <div id="transferScreen" class="wizard-screen">
       <h2 id="transferTitle">Step 3: Connected</h2>
 
       <!-- Visible only in send flow -->
       <div id="sendControls">
+        <label class="input-label" for="fileInput">Choose File</label>
         <input id="fileInput" type="file" />
         <p id="selectedFileName">📄 Select a file to start sharing</p>
         <button id="sendFileBtn" class="btn btn-green">Send File</button>

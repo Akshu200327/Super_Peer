@@ -29,6 +29,9 @@ const successPopup = document.getElementById("successPopup");
 const successLoader = document.getElementById("successLoader");
 const successTitle = document.getElementById("successTitle");
 const successSubtext = document.getElementById("successSubtext");
+const connectionErrorBox = document.getElementById("connectionErrorBox");
+const connectionErrorText = document.getElementById("connectionErrorText");
+const retryConnectionBtn = document.getElementById("retryConnectionBtn");
 
 // Wizard screens
 const entryScreen = document.getElementById("entryScreen");
@@ -92,6 +95,9 @@ let receivedChunks = [];
 let receivedBytes = 0;
 let waitingDotsTimer = null;
 let successPopupTimers = [];
+let connectionTimeoutTimer = null;
+let retryRoomId = null;
+let transferDirectionText = "Progress";
 
 // STUN config
 const rtcConfig = {
@@ -176,6 +182,7 @@ function showScreen(screenElement) {
 // In receive mode, show waiting info only.
 function showConnectedStep() {
   showScreen(transferScreen);
+  hideConnectionFailure();
 
   if (currentFlow === "send") {
     transferTitle.textContent = "Step 3: Connected - Send File";
@@ -198,6 +205,7 @@ function resetTransferUi() {
   } else {
     logMissingElement("fileInput");
   }
+  transferDirectionText = "Progress";
   setProgress(0);
   if (fileStatusText) {
     fileStatusText.textContent = "File Status: idle";
@@ -219,6 +227,8 @@ function resetTransferUi() {
 // Go back to mode selection screen and reset local UI state
 function goToModeSelection() {
   stopWaitingDots();
+  clearConnectionTimeout();
+  hideConnectionFailure();
   successPopup.classList.add("hidden-block");
   successPopup.classList.remove("celebrate");
 
@@ -244,23 +254,75 @@ function goToModeSelection() {
   waitingRoomDisplay.innerHTML = "Room ID: <strong>Not created yet</strong>";
   copyRoomBtn.disabled = true;
   waitingCopyRoomBtn.disabled = true;
+  setCreateRoomButtonDisabled(false);
+  setJoinRoomButtonDisabled(false);
 
   resetTransferUi();
   showScreen(entryScreen);
   statusText.textContent = "";
 }
 
+function clearConnectionTimeout() {
+  if (!connectionTimeoutTimer) return;
+  clearTimeout(connectionTimeoutTimer);
+  connectionTimeoutTimer = null;
+}
+
+function startConnectionTimeout() {
+  clearConnectionTimeout();
+  connectionTimeoutTimer = setTimeout(() => {
+    showConnectionFailure("Connection failed. Try again.");
+  }, 8000);
+}
+
+function hideConnectionFailure() {
+  if (connectionErrorBox) {
+    connectionErrorBox.classList.add("hidden-block");
+  } else {
+    logMissingElement("connectionErrorBox");
+  }
+}
+
+function showConnectionFailure(message) {
+  clearConnectionTimeout();
+  isPeerConnected = false;
+  setCreateRoomButtonDisabled(false);
+  setJoinRoomButtonDisabled(false);
+  updateSendFileButtonState();
+
+  if (statusText) {
+    statusText.textContent = message;
+  } else {
+    logMissingElement("statusText");
+  }
+
+  if (connectionErrorText) {
+    connectionErrorText.textContent = message;
+  } else {
+    logMissingElement("connectionErrorText");
+  }
+
+  if (connectionErrorBox) {
+    connectionErrorBox.classList.remove("hidden-block");
+  } else {
+    logMissingElement("connectionErrorBox");
+  }
+
+  showToast("Connection failed. Try again.", "error");
+}
+
 // -----------------------------
 // TOAST + PROGRESS
 // -----------------------------
-function showToast(message) {
+function showToast(message, type = "info") {
   if (!toastContainer) {
     logMissingElement("toastContainer");
     return;
   }
 
   const toast = document.createElement("div");
-  toast.className = "toast";
+  const toastType = ["success", "error", "info"].includes(type) ? type : "info";
+  toast.className = `toast toast-${toastType}`;
   toast.textContent = message;
   toastContainer.appendChild(toast);
 
@@ -268,11 +330,11 @@ function showToast(message) {
     toast.style.opacity = "0";
     toast.style.transform = "translateY(-6px)";
     toast.style.transition = "opacity 0.2s ease, transform 0.2s ease";
-  }, 1800);
+  }, 2800);
 
   setTimeout(() => {
     toast.remove();
-  }, 2100);
+  }, 3000);
 }
 
 // Center popup after successful connection
@@ -336,7 +398,7 @@ function setProgress(percent) {
     logMissingElement("fileProgressValue");
   }
   if (fileProgressText) {
-    fileProgressText.textContent = "Transfer progress: " + safePercent + "%";
+    fileProgressText.textContent = `${transferDirectionText}: ${safePercent}%`;
   } else {
     logMissingElement("fileProgressText");
   }
@@ -354,6 +416,22 @@ function updateSendFileButtonState() {
 
   const hasFile = fileInput.files && fileInput.files.length > 0;
   sendFileBtn.disabled = !(currentFlow === "send" && hasFile && isPeerConnected);
+}
+
+function setCreateRoomButtonDisabled(disabled) {
+  if (createRoomBtn) {
+    createRoomBtn.disabled = disabled;
+  } else {
+    logMissingElement("createRoomBtn");
+  }
+}
+
+function setJoinRoomButtonDisabled(disabled) {
+  if (joinRoomBtn) {
+    joinRoomBtn.disabled = disabled;
+  } else {
+    logMissingElement("joinRoomBtn");
+  }
 }
 
 // -----------------------------
@@ -382,8 +460,10 @@ function createPeerConnection() {
   peerConnection.onconnectionstatechange = () => {
     if (peerConnection.connectionState === "connected") {
       isPeerConnected = true;
+      clearConnectionTimeout();
       showConnectedStep();
       showConnectionSuccessPopup();
+      showToast("Secure connection established", "success");
       updateSendFileButtonState();
       return;
     }
@@ -393,8 +473,7 @@ function createPeerConnection() {
       peerConnection.connectionState === "disconnected" ||
       peerConnection.connectionState === "closed"
     ) {
-      isPeerConnected = false;
-      updateSendFileButtonState();
+      showConnectionFailure("Connection failed. Try again.");
     }
   };
 }
@@ -422,6 +501,7 @@ function setupDataChannelEvents(channel) {
         incomingFileInfo = { name: meta.name, size: meta.size };
         receivedChunks = [];
         receivedBytes = 0;
+        transferDirectionText = "Receiving...";
         fileStatusText.textContent = "File Status: Receiving file...";
         selectedFileName.textContent = "Receiving: " + incomingFileInfo.name;
         setProgress(0);
@@ -461,7 +541,7 @@ function setupDataChannelEvents(channel) {
 
       fileStatusText.textContent = "File Status: File received successfully";
       setProgress(100);
-      showToast("File received");
+      showToast("File received", "success");
 
       incomingFileInfo = null;
       receivedChunks = [];
@@ -494,7 +574,7 @@ addSafeListener(disconnectBtn, "disconnectBtn", "click", () => {
   }
 
   goToModeSelection();
-  showToast("Disconnected");
+  showToast("Disconnected", "info");
   if (headerMenu) {
     headerMenu.classList.add("hidden-block");
   } else {
@@ -506,8 +586,12 @@ addSafeListener(sendModeBtn, "sendModeBtn", "click", () => {
   currentFlow = "send";
   isCreator = true;
   currentRoomId = null;
+  retryRoomId = null;
+  hideConnectionFailure();
+  clearConnectionTimeout();
   copyRoomBtn.disabled = true;
   waitingCopyRoomBtn.disabled = true;
+  setCreateRoomButtonDisabled(false);
   roomDisplay.innerHTML = "Room ID: <strong>Not created yet</strong>";
   waitingRoomDisplay.innerHTML = "Room ID: <strong>Not created yet</strong>";
   resetTransferUi();
@@ -518,7 +602,11 @@ addSafeListener(receiveModeBtn, "receiveModeBtn", "click", () => {
   currentFlow = "receive";
   isCreator = false;
   currentRoomId = null;
+  retryRoomId = null;
+  hideConnectionFailure();
+  clearConnectionTimeout();
   roomInput.value = "";
+  setJoinRoomButtonDisabled(false);
   resetTransferUi();
   showScreen(receiveJoinScreen);
 });
@@ -527,6 +615,7 @@ addSafeListener(receiveModeBtn, "receiveModeBtn", "click", () => {
 // SEND FLOW
 // -----------------------------
 addSafeListener(createRoomBtn, "createRoomBtn", "click", () => {
+  setCreateRoomButtonDisabled(true);
   socket.emit("create-room");
 });
 
@@ -543,7 +632,7 @@ async function copyRoomId() {
 
   try {
     await navigator.clipboard.writeText(currentRoomId);
-    showToast("Room code copied");
+    showToast("Room code copied", "info");
     copyRoomBtn.textContent = "Copied";
     waitingCopyRoomBtn.textContent = "Copied";
     setTimeout(() => {
@@ -565,6 +654,10 @@ addSafeListener(joinRoomBtn, "joinRoomBtn", "click", () => {
     return;
   }
 
+  retryRoomId = roomId;
+  setJoinRoomButtonDisabled(true);
+  hideConnectionFailure();
+  startConnectionTimeout();
   socket.emit("join-room", roomId);
   showScreen(receiveConnectingScreen);
   statusText.textContent = "";
@@ -618,6 +711,7 @@ addSafeListener(sendFileBtn, "sendFileBtn", "click", () => {
 
     fileStatusText.textContent = "File Status: Sending file...";
     selectedFileName.textContent = "Sending: " + file.name;
+    transferDirectionText = "Sending...";
     setProgress(0);
 
     let sentBytes = 0;
@@ -638,7 +732,7 @@ addSafeListener(sendFileBtn, "sendFileBtn", "click", () => {
 
     fileStatusText.textContent = "File Status: File sent successfully";
     setProgress(100);
-    showToast("File sent");
+    showToast("File sent successfully", "success");
 
     setTimeout(() => {
       resetTransferUi();
@@ -657,15 +751,19 @@ socket.on("connect", () => {
 
 socket.on("connect_error", (err) => {
   console.log("Connection error:", err.message);
+  showConnectionFailure("Connection failed. Try again.");
 });
 
 socket.on("room-created", (roomId) => {
   currentRoomId = roomId;
+  retryRoomId = roomId;
   roomDisplay.innerHTML = `Room ID: <strong>${roomId}</strong>`;
   waitingRoomDisplay.innerHTML = `Room ID: <strong>${roomId}</strong>`;
   copyRoomBtn.disabled = false;
   waitingCopyRoomBtn.disabled = false;
-  showToast("Room is ready. Share the code.");
+  hideConnectionFailure();
+  startConnectionTimeout();
+  showToast("Room created successfully", "success");
 
   // Send flow step 2
   showScreen(sendWaitingScreen);
@@ -673,6 +771,10 @@ socket.on("room-created", (roomId) => {
 
 socket.on("joined-room", (roomId) => {
   currentRoomId = roomId;
+  retryRoomId = roomId;
+  setJoinRoomButtonDisabled(true);
+  hideConnectionFailure();
+  startConnectionTimeout();
   showScreen(receiveConnectingScreen);
 });
 
@@ -721,8 +823,44 @@ socket.on("ice-candidate", async (candidate) => {
 });
 
 socket.on("error-message", (message) => {
+  clearConnectionTimeout();
+  setCreateRoomButtonDisabled(false);
+  setJoinRoomButtonDisabled(false);
   statusText.textContent = message;
-  showToast(message);
+  showToast(message, "error");
+});
+
+addSafeListener(retryConnectionBtn, "retryConnectionBtn", "click", () => {
+  clearConnectionTimeout();
+  hideConnectionFailure();
+
+  if (peerConnection) {
+    peerConnection.close();
+    peerConnection = null;
+  }
+  if (dataChannel) {
+    dataChannel.close();
+    dataChannel = null;
+  }
+
+  if (currentFlow === "receive" && retryRoomId) {
+    showScreen(receiveConnectingScreen);
+    statusText.textContent = "";
+    setJoinRoomButtonDisabled(true);
+    socket.emit("join-room", retryRoomId);
+    startConnectionTimeout();
+    return;
+  }
+
+  if (currentFlow === "send") {
+    showScreen(sendCreateScreen);
+    statusText.textContent = "";
+    setCreateRoomButtonDisabled(true);
+    socket.emit("create-room");
+    return;
+  }
+
+  showScreen(entryScreen);
 });
 
 // Show loading screen briefly before main wizard

@@ -160,6 +160,14 @@ h2 {
 }
 
 /* Inputs and buttons */
+.input-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+}
+
 input {
   width: 100%;
   padding: 11px;
@@ -198,6 +206,11 @@ input:focus {
 }
 
 .btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }
@@ -282,7 +295,7 @@ input:focus {
 /* Progress bar */
 .progress-track {
   width: 100%;
-  height: 8px;
+  height: 16px;
   margin-top: 10px;
   border-radius: 999px;
   background: #e5e7eb;
@@ -294,8 +307,8 @@ input:focus {
   width: 0%;
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, #3b82f6, #22c55e);
-  transition: width 0.3s ease;
+  background: linear-gradient(90deg, #3b82f6 0%, #22c55e 100%);
+  transition: width 0.35s ease;
 }
 
 .progress-value {
@@ -303,7 +316,7 @@ input:focus {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   color: #ffffff;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
@@ -312,6 +325,20 @@ input:focus {
 
 .hidden-block {
   display: none;
+}
+
+.connection-error-box {
+  margin-top: 12px;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+#connectionErrorText {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #b91c1c;
 }
 
 .success-popup {
@@ -378,13 +405,24 @@ input:focus {
 .toast {
   min-width: 180px;
   max-width: 260px;
-  background: #111827;
   color: #ffffff;
   border-radius: 10px;
   padding: 10px 12px;
   font-size: 13px;
   box-shadow: 0 10px 22px rgba(0, 0, 0, 0.2);
   animation: toast-in 0.25s ease;
+}
+
+.toast-info {
+  background: #2563eb;
+}
+
+.toast-success {
+  background: #16a34a;
+}
+
+.toast-error {
+  background: #dc2626;
 }
 
 @keyframes toast-in {
@@ -464,6 +502,10 @@ body.dark-mode input {
   color: #ffffff;
 }
 
+body.dark-mode .input-label {
+  color: #d1d5db;
+}
+
 body.dark-mode input:focus {
   border-color: #60a5fa;
   box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.24);
@@ -505,4 +547,13 @@ body.dark-mode .state-box {
   border-color: #1d4ed8;
   background: #1e3a8a33;
   color: #bfdbfe;
+}
+
+body.dark-mode .connection-error-box {
+  border-color: #7f1d1d;
+  background: #3a1212;
+}
+
+body.dark-mode #connectionErrorText {
+  color: #fca5a5;
 }
