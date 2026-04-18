@@ -134,14 +134,22 @@ const MAX_FILE_RETRIES = 2;
 let transferUiState = TRANSFER_UI_STATES.CONNECTED;
 
 const DEFAULT_ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
-const NETWORK_RELAY_RETRY_MESSAGE =
-  "Connection issue due to network restrictions. Retrying via relay...";
-const RELAY_RETRY_UI_MESSAGE = "Retrying via relay for better compatibility...";
+const NETWORK_RELAY_RETRY_MESSAGE = "Reconnecting...";
+const RELAY_RETRY_UI_MESSAGE = "Reconnecting...";
+const HYBRID_OPTIMIZE_MESSAGE = "Optimizing connection...";
+const HYBRID_STABILIZE_MESSAGE = "Stabilizing transfer...";
+const HYBRID_IMPROVE_MESSAGE = "Improving speed...";
+const CONNECTION_INTERRUPTED_MESSAGE = "Connection interrupted";
 const FORCE_RELAY_ONLY = new URLSearchParams(window.location.search).get("relayOnly") === "1";
 let hasRelayCandidateSeen = false;
 let relayRetryAttempted = false;
 let relayFallbackEnabled = false;
 let isRelayRetryInProgress = false;
+let isRelayConnection = false;
+let useFastServerMode = false;
+let hybridFallbackTriggered = false;
+const HYBRID_SPEED_THRESHOLD = 300 * 1024; // 300 KB/s
+const HYBRID_SPEED_SAMPLE_SECONDS = 5;
 
 async function getIceServers() {
   try {
@@ -245,7 +253,8 @@ function showConnectedStep() {
 
   if (userRole === "sender") {
     transferTitle.textContent = "Send files";
-    setTransferStatus("");
+    useFastServerMode = false;
+    setTransferActivity("");
     setTransferUiState(TRANSFER_UI_STATES.CONNECTED);
     if (sendFileBtn) {
       sendFileBtn.disabled = true;
@@ -254,7 +263,8 @@ function showConnectedStep() {
     }
   } else {
     transferTitle.textContent = "Receiving files...";
-    setTransferStatus("");
+    useFastServerMode = false;
+    setTransferActivity("");
     setTransferUiState(TRANSFER_UI_STATES.CONNECTED);
     if (sendFileBtn) {
       sendFileBtn.disabled = true;
@@ -282,12 +292,14 @@ function resetTransferUi() {
   manualRetryContext = null;
   isTransferCancelled = false;
   isRelayRetryInProgress = false;
+  useFastServerMode = false;
+  hybridFallbackTriggered = false;
   setProgress(0);
   setTransferMetaText("");
   setSendButtonLoading(false);
   renderTransferList();
   updateTotalProgressUi();
-  setTransferStatus("");
+  setTransferActivity("");
   setTransferUiState(TRANSFER_UI_STATES.CONNECTED);
   renderFilePreview([]);
   if (fileInputContainer) {
@@ -318,9 +330,12 @@ function goToModeSelection() {
   currentRoomId = null;
   isCreator = false;
   isPeerConnected = false;
+  isRelayConnection = false;
   relayRetryAttempted = false;
   relayFallbackEnabled = false;
   isRelayRetryInProgress = false;
+  useFastServerMode = false;
+  hybridFallbackTriggered = false;
   incomingFileInfo = null;
   receivedChunks = [];
   receivedBytes = 0;
@@ -348,7 +363,7 @@ function startConnectionTimeout() {
   connectionTimeoutTimer = setTimeout(async () => {
     const retried = await retryConnectionViaRelay("timeout");
     if (!retried) {
-      showConnectionFailure(NETWORK_RELAY_RETRY_MESSAGE);
+      showConnectionFailure(CONNECTION_INTERRUPTED_MESSAGE);
     }
   }, 8000);
 }
@@ -386,7 +401,7 @@ function showConnectionFailure(message) {
     logMissingElement("connectionErrorBox");
   }
 
-  showToast("Connection failed. Try again.", "error");
+  showToast(message || CONNECTION_INTERRUPTED_MESSAGE, "error");
 }
 
 // -----------------------------
@@ -422,6 +437,10 @@ function setTransferStatus(text) {
   }
   roleStatusText.textContent = text || "";
   roleStatusText.classList.toggle("hidden-block", !text);
+}
+
+function setTransferActivity(activityText) {
+  setTransferStatus(activityText || "");
 }
 
 function setInlineStatus(text) {
@@ -500,6 +519,8 @@ function setTransferUiState(nextState) {
     nextState === TRANSFER_UI_STATES.RECEIVING ||
     nextState === TRANSFER_UI_STATES.ERROR;
   const showCompletedPanel = nextState === TRANSFER_UI_STATES.COMPLETED;
+  const isTransferActive =
+    nextState === TRANSFER_UI_STATES.SENDING || nextState === TRANSFER_UI_STATES.RECEIVING;
 
   if (sendControls) {
     sendControls.classList.toggle("hidden-block", !isSender);
@@ -533,6 +554,12 @@ function setTransferUiState(nextState) {
     logMissingElement("sendFileBtn");
   }
 
+  if (fileInput) {
+    fileInput.disabled = userRole !== "sender" || isTransferActive;
+  } else {
+    logMissingElement("fileInput");
+  }
+
   if (cancelTransferBtn) {
     const shouldShowCancel =
       nextState === TRANSFER_UI_STATES.SENDING || nextState === TRANSFER_UI_STATES.RECEIVING;
@@ -551,7 +578,7 @@ function setTransferUiState(nextState) {
   }
 
   if (completionMessage) {
-    completionMessage.textContent = userRole === "sender" ? "Files sent successfully." : "Files received successfully.";
+    completionMessage.textContent = "Transfer completed successfully";
   } else {
     logMissingElement("completionMessage");
   }
@@ -681,12 +708,10 @@ function renderTransferList() {
         <div class="file-item">
           <div class="file-item-head">
             <span class="file-item-name">${escapeHtml(item.name)}</span>
-            <span class="file-item-size">${formatFileSize(item.size)}</span>
           </div>
           <div class="file-item-progress">
             <div class="file-item-fill" style="width: ${item.progress}%"></div>
           </div>
-          <div class="file-item-status">${escapeHtml(item.status)} (${item.progress}%)</div>
         </div>
       `
     )
@@ -852,12 +877,149 @@ async function warnIfTurnRelayNotUsed(pc) {
         (remoteCandidate && remoteCandidate.candidateType === "relay");
     }
 
-    if (!relayUsed && !hasRelayCandidateSeen) {
+    isRelayConnection = relayUsed || hasRelayCandidateSeen;
+
+    if (!isRelayConnection) {
       console.warn("TURN not used → possible failure on mobile network");
     }
+    return isRelayConnection;
   } catch (error) {
     console.warn("Could not verify TURN relay usage:", error.message);
+    return hasRelayCandidateSeen;
   }
+}
+
+function shouldSwitchToFastModeBySpeed() {
+  if (useFastServerMode || hybridFallbackTriggered || !transferStartedAt) {
+    return false;
+  }
+  const elapsedSeconds = (Date.now() - transferStartedAt) / 1000;
+  if (elapsedSeconds < HYBRID_SPEED_SAMPLE_SECONDS) {
+    return false;
+  }
+  const speedBytesPerSecond = totalTransferredBytes / Math.max(1, elapsedSeconds);
+  return speedBytesPerSecond < HYBRID_SPEED_THRESHOLD;
+}
+
+async function uploadFileToServer(file) {
+  const uploadUrl = `/upload?name=${encodeURIComponent(file.name)}&type=${encodeURIComponent(file.type || "application/octet-stream")}`;
+  const fileBuffer = await file.arrayBuffer();
+  const res = await fetch(uploadUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/octet-stream"
+    },
+    body: fileBuffer
+  });
+
+  if (!res.ok) {
+    const errorPayload = await res.json().catch(() => null);
+    throw new Error(errorPayload && errorPayload.error ? errorPayload.error : "Transfer failed");
+  }
+  const payload = await res.json();
+  return payload.url;
+}
+
+function saveBlobAsFile(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function receiveFileFromServer(meta) {
+  const fileIndex = (meta.fileIndex || 1) - 1;
+  useFastServerMode = true;
+  hybridFallbackTriggered = true;
+  setTransferUiState(TRANSFER_UI_STATES.RECEIVING);
+  setTransferActivity("Downloading...");
+
+  if (transferItems.length <= fileIndex) {
+    transferItems[fileIndex] = {
+      name: meta.name,
+      size: meta.size,
+      progress: 0,
+      status: "Downloading",
+      transferredBytes: 0
+    };
+  }
+
+  const item = transferItems[fileIndex];
+  item.name = meta.name;
+  item.size = meta.size;
+  item.status = "Downloading";
+  item.progress = 0;
+  item.transferredBytes = 0;
+  totalTransferBytes = Math.max(totalTransferBytes, transferItems.reduce((sum, current) => {
+    if (!current) return sum;
+    return sum + (current.size || 0);
+  }, 0));
+  renderTransferList();
+  updateTotalProgressUi();
+
+  const res = await fetch(meta.url);
+  if (!res.ok) {
+    throw new Error("Fast mode download failed");
+  }
+  const blob = await res.blob();
+  saveBlobAsFile(blob, meta.name);
+
+  item.progress = 100;
+  item.status = "Received";
+  item.transferredBytes = item.size;
+  recalculateTotalTransferredBytes();
+  renderTransferList();
+  updateTotalProgressUi();
+  updateTransferMeta();
+  showToast("File received", "success");
+
+  if ((meta.fileIndex || 1) >= (meta.totalFiles || 1)) {
+    setTransferActivity("");
+    setTransferMetaText("");
+    setTransferUiState(TRANSFER_UI_STATES.COMPLETED);
+  }
+}
+
+async function switchCurrentFileToFastMode(file, fileIndex, totalFiles) {
+  useFastServerMode = true;
+  if (!hybridFallbackTriggered) {
+    hybridFallbackTriggered = true;
+    setTransferActivity(HYBRID_OPTIMIZE_MESSAGE);
+    showToast(HYBRID_OPTIMIZE_MESSAGE, "info");
+  } else {
+    setTransferActivity(HYBRID_IMPROVE_MESSAGE);
+  }
+
+  const url = await uploadFileToServer(file);
+  if (!dataChannel || dataChannel.readyState !== "open") {
+    throw new Error(CONNECTION_INTERRUPTED_MESSAGE);
+  }
+
+  const item = transferItems[fileIndex - 1];
+  if (item) {
+    item.progress = 100;
+    item.status = "Sent";
+    item.transferredBytes = file.size;
+  }
+  recalculateTotalTransferredBytes();
+  renderTransferList();
+  updateTotalProgressUi();
+  updateTransferMeta();
+
+  dataChannel.send(
+    JSON.stringify({
+      type: "hybrid-url",
+      name: file.name,
+      size: file.size,
+      url,
+      fileIndex,
+      totalFiles
+    })
+  );
+  setTransferActivity(HYBRID_IMPROVE_MESSAGE);
+  return { mode: "hybrid" };
 }
 
 async function retryConnectionViaRelay(reason) {
@@ -879,7 +1041,7 @@ async function retryConnectionViaRelay(reason) {
   relayFallbackEnabled = true;
   isRelayRetryInProgress = true;
   clearConnectionTimeout();
-  setInlineStatus(RELAY_RETRY_UI_MESSAGE);
+  setTransferActivity(HYBRID_STABILIZE_MESSAGE);
   showToast(RELAY_RETRY_UI_MESSAGE, "info");
   console.warn(`Retrying with relay policy due to ${reason}`);
 
@@ -953,6 +1115,7 @@ async function createPeerConnection() {
     iceTransportPolicy: transportPolicy
   });
   hasRelayCandidateSeen = false;
+  isRelayConnection = false;
   console.log("ICE transport policy:", transportPolicy);
 
   // Receiver gets data channel from sender
@@ -981,14 +1144,14 @@ async function createPeerConnection() {
       peerConnection.iceConnectionState === "connected" ||
       peerConnection.iceConnectionState === "completed"
     ) {
-      await warnIfTurnRelayNotUsed(peerConnection);
+      isRelayConnection = await warnIfTurnRelayNotUsed(peerConnection);
       return;
     }
 
     if (peerConnection.iceConnectionState === "failed") {
       const retried = await retryConnectionViaRelay("ice-failed");
       if (!retried) {
-        showConnectionFailure(NETWORK_RELAY_RETRY_MESSAGE);
+        showConnectionFailure(CONNECTION_INTERRUPTED_MESSAGE);
       }
     }
   };
@@ -998,9 +1161,9 @@ async function createPeerConnection() {
     if (peerConnection.connectionState === "connected") {
       isPeerConnected = true;
       clearConnectionTimeout();
+      isRelayConnection = await warnIfTurnRelayNotUsed(peerConnection);
       showConnectedStep();
       showToast("Secure connection established", "success");
-      await warnIfTurnRelayNotUsed(peerConnection);
       updateSendFileButtonState();
       return;
     }
@@ -1017,7 +1180,7 @@ async function createPeerConnection() {
         }
       }
       if (!isRelayRetryInProgress) {
-        showConnectionFailure(NETWORK_RELAY_RETRY_MESSAGE);
+        showConnectionFailure(CONNECTION_INTERRUPTED_MESSAGE);
       }
     }
   };
@@ -1039,7 +1202,7 @@ function setupDataChannelEvents(channel) {
     URL.revokeObjectURL(url);
 
     setInlineStatus("");
-    setTransferStatus("");
+    setTransferActivity("");
     updateTransferItemProgress(completedFileInfo.fileIndex - 1, 100, "Received");
     showToast("File received", "success");
 
@@ -1049,7 +1212,7 @@ function setupDataChannelEvents(channel) {
     incomingFileMarkedComplete = false;
 
     if (completedFileInfo.fileIndex >= completedFileInfo.totalFiles) {
-      setTransferStatus("");
+      setTransferActivity("");
       setTransferMetaText("");
       setTransferUiState(TRANSFER_UI_STATES.COMPLETED);
     }
@@ -1066,9 +1229,9 @@ function setupDataChannelEvents(channel) {
       (transferUiState === TRANSFER_UI_STATES.SENDING ||
         transferUiState === TRANSFER_UI_STATES.RECEIVING)
     ) {
-      setInlineStatus("Connection lost");
+      setInlineStatus(CONNECTION_INTERRUPTED_MESSAGE);
       setTransferUiState(TRANSFER_UI_STATES.ERROR);
-      showToast("Connection lost", "error");
+      showToast(CONNECTION_INTERRUPTED_MESSAGE, "error");
     }
     updateSendFileButtonState();
   };
@@ -1088,11 +1251,26 @@ function setupDataChannelEvents(channel) {
         receivedChunks = [];
         receivedBytes = 0;
         incomingFileMarkedComplete = false;
-        setTransferStatus("");
+        setTransferActivity("");
         setTransferMetaText("");
         setInlineStatus("Transfer cancelled");
         setTransferUiState(TRANSFER_UI_STATES.CONNECTED);
         updateSendFileButtonState();
+        return;
+      }
+
+      if (meta && meta.type === "hybrid-url") {
+        try {
+          incomingFileInfo = null;
+          receivedChunks = [];
+          receivedBytes = 0;
+          incomingFileMarkedComplete = false;
+          await receiveFileFromServer(meta);
+        } catch (error) {
+          setInlineStatus("Transfer failed");
+          setTransferUiState(TRANSFER_UI_STATES.ERROR);
+          showToast("Transfer failed", "error");
+        }
         return;
       }
 
@@ -1114,7 +1292,7 @@ function setupDataChannelEvents(channel) {
         receivedChunks = [];
         receivedBytes = 0;
         incomingFileMarkedComplete = false;
-        setTransferStatus(`Receiving: ${incomingFileInfo.name}`);
+        setTransferActivity(`Receiving: ${incomingFileInfo.name}`);
         setInlineStatus("");
         setTransferUiState(TRANSFER_UI_STATES.RECEIVING);
         transferItems.push({
@@ -1235,6 +1413,8 @@ addSafeListener(sendModeBtn, "sendModeBtn", "click", () => {
   relayRetryAttempted = false;
   relayFallbackEnabled = false;
   isRelayRetryInProgress = false;
+  isRelayConnection = false;
+  hybridFallbackTriggered = false;
   hideConnectionFailure();
   clearConnectionTimeout();
   copyRoomBtn.disabled = true;
@@ -1256,6 +1436,8 @@ addSafeListener(receiveModeBtn, "receiveModeBtn", "click", () => {
   relayRetryAttempted = false;
   relayFallbackEnabled = false;
   isRelayRetryInProgress = false;
+  isRelayConnection = false;
+  hybridFallbackTriggered = false;
   hideConnectionFailure();
   clearConnectionTimeout();
   roomInput.value = "";
@@ -1344,7 +1526,7 @@ function rebuildSenderDataChannel() {
 function waitForDataChannelOpen(channel, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     if (!channel) {
-      reject(new Error("Connection lost"));
+      reject(new Error(CONNECTION_INTERRUPTED_MESSAGE));
       return;
     }
     if (channel.readyState === "open") {
@@ -1363,7 +1545,7 @@ function waitForDataChannelOpen(channel, timeoutMs = 5000) {
       if (timeoutId) clearTimeout(timeoutId);
       channel.removeEventListener("open", handleOpen);
       channel.removeEventListener("close", handleClose);
-      reject(new Error("Connection lost"));
+      reject(new Error(CONNECTION_INTERRUPTED_MESSAGE));
     };
 
     channel.addEventListener("open", handleOpen, { once: true });
@@ -1371,7 +1553,7 @@ function waitForDataChannelOpen(channel, timeoutMs = 5000) {
     timeoutId = setTimeout(() => {
       channel.removeEventListener("open", handleOpen);
       channel.removeEventListener("close", handleClose);
-      reject(new Error("Connection lost"));
+      reject(new Error(CONNECTION_INTERRUPTED_MESSAGE));
     }, timeoutMs);
   });
 }
@@ -1379,7 +1561,7 @@ function waitForDataChannelOpen(channel, timeoutMs = 5000) {
 async function ensureSenderDataChannelReady() {
   if (userRole !== "sender") return;
   if (!peerConnection || peerConnection.connectionState !== "connected") {
-    throw new Error("Connection lost");
+    throw new Error(CONNECTION_INTERRUPTED_MESSAGE);
   }
   if (!dataChannel || dataChannel.readyState === "closed" || dataChannel.readyState === "closing") {
     rebuildSenderDataChannel();
@@ -1416,7 +1598,7 @@ async function cancelTransfer() {
   receivedChunks = [];
   receivedBytes = 0;
   incomingFileMarkedComplete = false;
-  setTransferStatus("");
+  setTransferActivity("");
   setTransferMetaText("");
   setInlineStatus("Transfer cancelled");
   setTransferUiState(TRANSFER_UI_STATES.CONNECTED);
@@ -1429,13 +1611,17 @@ async function sendSingleFile(file, fileIndex, totalFiles) {
     throw new Error("Transfer cancelled");
   }
 
+  if (useFastServerMode || (!hybridFallbackTriggered && (isRelayConnection || shouldSwitchToFastModeBySpeed()))) {
+    return switchCurrentFileToFastMode(file, fileIndex, totalFiles);
+  }
+
   await ensureSenderDataChannelReady();
   const item = transferItems[fileIndex - 1];
   if (item) {
     item.transferredBytes = 0;
   }
   recalculateTotalTransferredBytes();
-  setTransferStatus(`Sending: ${file.name}`);
+  setTransferActivity(`Sending: ${file.name}`);
   setTransferUiState(TRANSFER_UI_STATES.SENDING);
   updateTransferItemProgress(fileIndex - 1, 0, "Sending");
 
@@ -1459,7 +1645,7 @@ async function sendSingleFile(file, fileIndex, totalFiles) {
       throw new Error("Transfer cancelled");
     }
     if (!dataChannel || dataChannel.readyState !== "open") {
-      throw new Error("Connection lost");
+      throw new Error(CONNECTION_INTERRUPTED_MESSAGE);
     }
 
     while (dataChannel.bufferedAmount > BUFFER_PAUSE_THRESHOLD) {
@@ -1468,7 +1654,7 @@ async function sendSingleFile(file, fileIndex, totalFiles) {
         throw new Error("Transfer cancelled");
       }
       if (!dataChannel || dataChannel.readyState !== "open") {
-        throw new Error("Connection lost");
+        throw new Error(CONNECTION_INTERRUPTED_MESSAGE);
       }
       await new Promise((resolve) => setTimeout(resolve, 1));
     }
@@ -1483,13 +1669,18 @@ async function sendSingleFile(file, fileIndex, totalFiles) {
     }
     const sendPercent = Math.min(100, Math.floor((sentBytes / file.size) * 100));
     updateTransferItemProgress(fileIndex - 1, sendPercent, "Sending");
+
+    if (shouldSwitchToFastModeBySpeed()) {
+      return switchCurrentFileToFastMode(file, fileIndex, totalFiles);
+    }
+
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
   updateTransferItemProgress(fileIndex - 1, 100, "Sent");
 
   if (!dataChannel || dataChannel.readyState !== "open") {
-    throw new Error("Connection lost");
+    throw new Error(CONNECTION_INTERRUPTED_MESSAGE);
   }
   dataChannel.send(
     JSON.stringify({
@@ -1500,14 +1691,15 @@ async function sendSingleFile(file, fileIndex, totalFiles) {
       totalFiles
     })
   );
+  return { mode: "p2p" };
 }
 
 async function sendSingleFileWithRetry(file, fileIndex, totalFiles) {
   let retryCount = 0;
   while (retryCount <= MAX_FILE_RETRIES) {
     try {
-      await sendSingleFile(file, fileIndex, totalFiles);
-      return;
+      const transferResult = await sendSingleFile(file, fileIndex, totalFiles);
+      return transferResult || { mode: "p2p" };
     } catch (error) {
       if (isTransferCancelled) {
         throw error;
@@ -1526,6 +1718,7 @@ async function sendSingleFileWithRetry(file, fileIndex, totalFiles) {
       throw error;
     }
   }
+  return { mode: "p2p" };
 }
 
 async function runSendQueue(filesToSend, startIndex = 0) {
@@ -1548,14 +1741,17 @@ async function runSendQueue(filesToSend, startIndex = 0) {
     await ensureSenderDataChannelReady();
     for (let index = startIndex; index < filesToSend.length; index += 1) {
       failedIndex = index;
-      await sendSingleFileWithRetry(filesToSend[index], index + 1, filesToSend.length);
+      const result = await sendSingleFileWithRetry(filesToSend[index], index + 1, filesToSend.length);
+      if (result && result.mode === "hybrid") {
+        useFastServerMode = true;
+      }
     }
 
-    setTransferStatus("");
+    setTransferActivity("");
     setTransferMetaText("");
     setInlineStatus("");
     setTransferUiState(TRANSFER_UI_STATES.COMPLETED);
-    showToast("File sent successfully", "success");
+    showToast("Transfer completed successfully", "success");
     return true;
   } catch (error) {
     if (isTransferCancelled) {
@@ -1564,10 +1760,14 @@ async function runSendQueue(filesToSend, startIndex = 0) {
 
     const retryStartIndex = failedIndex >= 0 ? failedIndex : startIndex;
     manualRetryContext = { files: filesToSend, startIndex: retryStartIndex };
-    setTransferStatus("");
-    setInlineStatus("Transfer failed");
+    const userMessage =
+      error.message === CONNECTION_INTERRUPTED_MESSAGE
+        ? CONNECTION_INTERRUPTED_MESSAGE
+        : error.message || "Transfer failed";
+    setTransferActivity("");
+    setInlineStatus(userMessage);
     setTransferUiState(TRANSFER_UI_STATES.ERROR);
-    showToast(error.message === "Connection lost" ? "Connection lost" : "Transfer failed", "error");
+    showToast(userMessage, "error");
     return false;
   } finally {
     isSendingFiles = false;
@@ -1703,7 +1903,7 @@ socket.on("connect", () => {
 
 socket.on("connect_error", (err) => {
   console.log("Connection error:", err.message);
-  showConnectionFailure("Connection failed. Try again.");
+  showConnectionFailure(CONNECTION_INTERRUPTED_MESSAGE);
 });
 
 socket.on("room-created", (roomId) => {
@@ -1802,9 +2002,12 @@ socket.on("error-message", (message) => {
 addSafeListener(retryConnectionBtn, "retryConnectionBtn", "click", () => {
   clearConnectionTimeout();
   hideConnectionFailure();
+  setInlineStatus(RELAY_RETRY_UI_MESSAGE);
+  showToast(RELAY_RETRY_UI_MESSAGE, "info");
   relayRetryAttempted = false;
   relayFallbackEnabled = false;
   isRelayRetryInProgress = false;
+  hybridFallbackTriggered = false;
 
   if (peerConnection) {
     peerConnection.close();
