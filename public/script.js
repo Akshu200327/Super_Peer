@@ -130,6 +130,14 @@ const MAX_FILE_RETRIES = 2;
 let transferUiState = TRANSFER_UI_STATES.CONNECTED;
 
 const DEFAULT_ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
+const NETWORK_RELAY_RETRY_MESSAGE =
+  "Connection issue due to network restrictions. Retrying via relay...";
+const RELAY_RETRY_UI_MESSAGE = "Retrying via relay for better compatibility...";
+const FORCE_RELAY_ONLY = new URLSearchParams(window.location.search).get("relayOnly") === "1";
+let hasRelayCandidateSeen = false;
+let relayRetryAttempted = false;
+let relayFallbackEnabled = false;
+let isRelayRetryInProgress = false;
 
 async function getIceServers() {
   try {
@@ -269,6 +277,7 @@ function resetTransferUi() {
   transferStartedAt = 0;
   manualRetryContext = null;
   isTransferCancelled = false;
+  isRelayRetryInProgress = false;
   setProgress(0);
   setTransferMetaText("");
   setSendButtonLoading(false);
@@ -305,6 +314,9 @@ function goToModeSelection() {
   currentRoomId = null;
   isCreator = false;
   isPeerConnected = false;
+  relayRetryAttempted = false;
+  relayFallbackEnabled = false;
+  isRelayRetryInProgress = false;
   incomingFileInfo = null;
   receivedChunks = [];
   receivedBytes = 0;
@@ -329,8 +341,11 @@ function clearConnectionTimeout() {
 
 function startConnectionTimeout() {
   clearConnectionTimeout();
-  connectionTimeoutTimer = setTimeout(() => {
-    showConnectionFailure("Connection failed. Try again.");
+  connectionTimeoutTimer = setTimeout(async () => {
+    const retried = await retryConnectionViaRelay("timeout");
+    if (!retried) {
+      showConnectionFailure(NETWORK_RELAY_RETRY_MESSAGE);
+    }
   }, 8000);
 }
 
@@ -810,6 +825,103 @@ function updateSendFileButtonState() {
     hasBlockedLargeFile;
 }
 
+async function warnIfTurnRelayNotUsed(pc) {
+  try {
+    const stats = await pc.getStats();
+    let selectedPair = null;
+    let relayUsed = false;
+
+    stats.forEach((report) => {
+      if (report.type === "transport" && report.selectedCandidatePairId) {
+        selectedPair = stats.get(report.selectedCandidatePairId) || selectedPair;
+      }
+      if (report.type === "candidate-pair" && report.selected) {
+        selectedPair = report;
+      }
+    });
+
+    if (selectedPair) {
+      const localCandidate = selectedPair.localCandidateId ? stats.get(selectedPair.localCandidateId) : null;
+      const remoteCandidate = selectedPair.remoteCandidateId ? stats.get(selectedPair.remoteCandidateId) : null;
+      relayUsed =
+        (localCandidate && localCandidate.candidateType === "relay") ||
+        (remoteCandidate && remoteCandidate.candidateType === "relay");
+    }
+
+    if (!relayUsed && !hasRelayCandidateSeen) {
+      console.warn("TURN not used → possible failure on mobile network");
+    }
+  } catch (error) {
+    console.warn("Could not verify TURN relay usage:", error.message);
+  }
+}
+
+async function retryConnectionViaRelay(reason) {
+  if (
+    isRelayRetryInProgress ||
+    relayRetryAttempted ||
+    FORCE_RELAY_ONLY ||
+    !currentRoomId ||
+    isPeerConnected
+  ) {
+    return false;
+  }
+
+  if (!peerConnection) {
+    return false;
+  }
+
+  relayRetryAttempted = true;
+  relayFallbackEnabled = true;
+  isRelayRetryInProgress = true;
+  clearConnectionTimeout();
+  setInlineStatus(RELAY_RETRY_UI_MESSAGE);
+  showToast(RELAY_RETRY_UI_MESSAGE, "info");
+  console.warn(`Retrying with relay policy due to ${reason}`);
+
+  try {
+    if (dataChannel) {
+      try {
+        dataChannel.close();
+      } catch (error) {
+        console.warn("Data channel close during relay retry failed:", error.message);
+      }
+      dataChannel = null;
+    }
+
+    if (peerConnection) {
+      try {
+        peerConnection.close();
+      } catch (error) {
+        console.warn("Peer connection close during relay retry failed:", error.message);
+      }
+      peerConnection = null;
+    }
+
+    await createPeerConnection();
+
+    if (isCreator) {
+      dataChannel = peerConnection.createDataChannel("file");
+      setupDataChannelEvents(dataChannel);
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      socket.emit("offer", {
+        roomId: currentRoomId,
+        offer: offer
+      });
+    }
+
+    startConnectionTimeout();
+    return true;
+  } catch (error) {
+    console.error("Relay retry failed:", error.message);
+    return false;
+  } finally {
+    isRelayRetryInProgress = false;
+    updateSendFileButtonState();
+  }
+}
+
 function setCreateRoomButtonDisabled(disabled) {
   if (createRoomBtn) {
     createRoomBtn.disabled = disabled;
@@ -831,9 +943,13 @@ function setJoinRoomButtonDisabled(disabled) {
 // -----------------------------
 async function createPeerConnection() {
   const iceServers = await getIceServers();
+  const transportPolicy = FORCE_RELAY_ONLY || relayFallbackEnabled ? "relay" : "all";
   peerConnection = new RTCPeerConnection({
-    iceServers: iceServers
+    iceServers: iceServers,
+    iceTransportPolicy: transportPolicy
   });
+  hasRelayCandidateSeen = false;
+  console.log("ICE transport policy:", transportPolicy);
 
   // Receiver gets data channel from sender
   peerConnection.ondatachannel = (event) => {
@@ -844,6 +960,10 @@ async function createPeerConnection() {
   // Send ICE to other peer through Socket.IO
   peerConnection.onicecandidate = (event) => {
     if (event.candidate && currentRoomId) {
+      console.log("Candidate:", event.candidate.candidate);
+      if (String(event.candidate.candidate).includes(" typ relay ")) {
+        hasRelayCandidateSeen = true;
+      }
       socket.emit("ice-candidate", {
         roomId: currentRoomId,
         candidate: event.candidate
@@ -851,13 +971,32 @@ async function createPeerConnection() {
     }
   };
 
+  peerConnection.oniceconnectionstatechange = async () => {
+    console.log("ICE state:", peerConnection.iceConnectionState);
+    if (
+      peerConnection.iceConnectionState === "connected" ||
+      peerConnection.iceConnectionState === "completed"
+    ) {
+      await warnIfTurnRelayNotUsed(peerConnection);
+      return;
+    }
+
+    if (peerConnection.iceConnectionState === "failed") {
+      const retried = await retryConnectionViaRelay("ice-failed");
+      if (!retried) {
+        showConnectionFailure(NETWORK_RELAY_RETRY_MESSAGE);
+      }
+    }
+  };
+
   // Wizard step movement based on connection state
-  peerConnection.onconnectionstatechange = () => {
+  peerConnection.onconnectionstatechange = async () => {
     if (peerConnection.connectionState === "connected") {
       isPeerConnected = true;
       clearConnectionTimeout();
       showConnectedStep();
       showToast("Secure connection established", "success");
+      await warnIfTurnRelayNotUsed(peerConnection);
       updateSendFileButtonState();
       return;
     }
@@ -867,7 +1006,15 @@ async function createPeerConnection() {
       peerConnection.connectionState === "disconnected" ||
       peerConnection.connectionState === "closed"
     ) {
-      showConnectionFailure("Connection failed. Try again.");
+      if (peerConnection.connectionState === "failed") {
+        const retried = await retryConnectionViaRelay("connection-failed");
+        if (retried) {
+          return;
+        }
+      }
+      if (!isRelayRetryInProgress) {
+        showConnectionFailure(NETWORK_RELAY_RETRY_MESSAGE);
+      }
     }
   };
 }
@@ -1081,6 +1228,9 @@ addSafeListener(sendModeBtn, "sendModeBtn", "click", () => {
   isCreator = true;
   currentRoomId = null;
   retryRoomId = null;
+  relayRetryAttempted = false;
+  relayFallbackEnabled = false;
+  isRelayRetryInProgress = false;
   hideConnectionFailure();
   clearConnectionTimeout();
   copyRoomBtn.disabled = true;
@@ -1099,6 +1249,9 @@ addSafeListener(receiveModeBtn, "receiveModeBtn", "click", () => {
   isCreator = false;
   currentRoomId = null;
   retryRoomId = null;
+  relayRetryAttempted = false;
+  relayFallbackEnabled = false;
+  isRelayRetryInProgress = false;
   hideConnectionFailure();
   clearConnectionTimeout();
   roomInput.value = "";
@@ -1593,7 +1746,19 @@ socket.on("peer-joined", async () => {
 });
 
 socket.on("offer", async (offer) => {
-  if (!peerConnection) {
+  if (
+    !peerConnection ||
+    peerConnection.connectionState === "failed" ||
+    peerConnection.connectionState === "closed"
+  ) {
+    if (peerConnection) {
+      try {
+        peerConnection.close();
+      } catch (error) {
+        console.warn("Peer connection reset before handling offer failed:", error.message);
+      }
+      peerConnection = null;
+    }
     await createPeerConnection();
   }
 
@@ -1614,6 +1779,11 @@ socket.on("answer", async (answer) => {
 
 socket.on("ice-candidate", async (candidate) => {
   if (!peerConnection) return;
+  if (candidate && candidate.candidate) {
+    if (String(candidate.candidate).includes(" typ relay ")) {
+      hasRelayCandidateSeen = true;
+    }
+  }
   await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
 });
 
@@ -1628,6 +1798,9 @@ socket.on("error-message", (message) => {
 addSafeListener(retryConnectionBtn, "retryConnectionBtn", "click", () => {
   clearConnectionTimeout();
   hideConnectionFailure();
+  relayRetryAttempted = false;
+  relayFallbackEnabled = false;
+  isRelayRetryInProgress = false;
 
   if (peerConnection) {
     peerConnection.close();
