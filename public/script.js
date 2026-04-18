@@ -462,7 +462,6 @@ function createPeerConnection() {
       isPeerConnected = true;
       clearConnectionTimeout();
       showConnectedStep();
-      showConnectionSuccessPopup();
       showToast("Secure connection established", "success");
       updateSendFileButtonState();
       return;
