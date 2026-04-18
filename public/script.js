@@ -80,6 +80,7 @@ const totalProgressText = document.getElementById("totalProgressText");
 // APP STATE
 // -----------------------------
 let currentFlow = null; // "send" | "receive"
+let userRole = null; // "sender" | "receiver"
 let currentRoomId = null;
 let isCreator = false;
 let isPeerConnected = false;
@@ -192,26 +193,45 @@ function showConnectedStep() {
   showScreen(transferScreen);
   hideConnectionFailure();
 
-  if (currentFlow === "send") {
+  if (userRole === "sender") {
     transferTitle.textContent = "Step 3: Connected - Send File";
     sendControls.classList.remove("hidden-block");
     receiveInfo.classList.add("hidden-block");
-    selectedFileName.textContent = "📄 Select a file to start sharing";
+    if (fileInput) {
+      fileInput.disabled = false;
+    } else {
+      logMissingElement("fileInput");
+    }
+    selectedFileName.textContent = "Ready to send files";
+    fileStatusText.textContent = "File Status: Ready to send files";
     setCurrentTransferFile("Current file: none");
   } else {
     transferTitle.textContent = "Step 3: Connected - Ready to Receive";
     sendControls.classList.add("hidden-block");
     receiveInfo.classList.remove("hidden-block");
-    selectedFileName.textContent = "Receiving: waiting for file...";
+    if (fileInput) {
+      fileInput.disabled = true;
+    } else {
+      logMissingElement("fileInput");
+    }
+    if (receiveInfo) {
+      receiveInfo.innerHTML = '<p class="helper-text">Waiting for sender...</p>';
+    } else {
+      logMissingElement("receiveInfo");
+    }
+    selectedFileName.textContent = "Waiting to receive files";
+    fileStatusText.textContent = "File Status: Waiting to receive files";
     setCurrentTransferFile("Current file: waiting for sender");
   }
 
   statusText.textContent = "";
+  updateSendFileButtonState();
 }
 
 function resetTransferUi() {
   if (fileInput) {
     fileInput.value = "";
+    fileInput.disabled = userRole !== "sender";
   } else {
     logMissingElement("fileInput");
   }
@@ -226,17 +246,25 @@ function resetTransferUi() {
   updateTotalProgressText();
   setCurrentTransferFile("Current file: none");
   if (fileStatusText) {
-    fileStatusText.textContent = "File Status: idle";
+    if (userRole === "sender") {
+      fileStatusText.textContent = "File Status: Ready to send files";
+    } else if (userRole === "receiver") {
+      fileStatusText.textContent = "File Status: Waiting to receive files";
+    } else {
+      fileStatusText.textContent = "File Status: idle";
+    }
   } else {
     logMissingElement("fileStatusText");
   }
 
   if (!selectedFileName) {
     logMissingElement("selectedFileName");
-  } else if (currentFlow === "send") {
-    selectedFileName.textContent = "📄 Select a file to start sharing";
+  } else if (userRole === "sender") {
+    selectedFileName.textContent = "Ready to send files";
+  } else if (userRole === "receiver") {
+    selectedFileName.textContent = "Waiting to receive files";
   } else {
-    selectedFileName.textContent = "Receiving: waiting for file...";
+    selectedFileName.textContent = "📄 Select a file to start sharing";
   }
 
   updateSendFileButtonState();
@@ -259,6 +287,7 @@ function goToModeSelection() {
   }
 
   currentFlow = null;
+  userRole = null;
   currentRoomId = null;
   isCreator = false;
   isPeerConnected = false;
@@ -507,7 +536,9 @@ function updateSendFileButtonState() {
 
   const hasFile = fileInput.files && fileInput.files.length > 0;
   sendFileBtn.disabled =
-    !(currentFlow === "send" && hasFile && isPeerConnected) || isSendingFiles || hasBlockedLargeFile;
+    !(userRole === "sender" && hasFile && isPeerConnected) ||
+    isSendingFiles ||
+    hasBlockedLargeFile;
 }
 
 function setCreateRoomButtonDisabled(disabled) {
@@ -754,6 +785,7 @@ addSafeListener(disconnectBtn, "disconnectBtn", "click", () => {
 
 addSafeListener(sendModeBtn, "sendModeBtn", "click", () => {
   currentFlow = "send";
+  userRole = "sender";
   isCreator = true;
   currentRoomId = null;
   retryRoomId = null;
@@ -770,6 +802,7 @@ addSafeListener(sendModeBtn, "sendModeBtn", "click", () => {
 
 addSafeListener(receiveModeBtn, "receiveModeBtn", "click", () => {
   currentFlow = "receive";
+  userRole = "receiver";
   isCreator = false;
   currentRoomId = null;
   retryRoomId = null;
@@ -892,6 +925,11 @@ async function sendSingleFile(file, fileIndex, totalFiles) {
 }
 
 async function sendFiles(files) {
+  if (userRole !== "sender") {
+    fileStatusText.textContent = "File Status: Waiting to receive files";
+    return;
+  }
+
   const filesToSend = Array.from(files || []);
   if (filesToSend.length === 0) {
     fileStatusText.textContent = "File Status: Please choose file(s) first";
@@ -950,6 +988,11 @@ async function sendFiles(files) {
 // FILE SEND ACTION (STEP 3 SEND)
 // -----------------------------
 addSafeListener(fileInput, "fileInput", "change", () => {
+  if (userRole !== "sender") {
+    updateSendFileButtonState();
+    return;
+  }
+
   if (fileInput.files.length > 0) {
     const { hasLargeWarning, blockedFile } = validateSelectedFiles(fileInput.files, false);
     hasBlockedLargeFile = !!blockedFile;
@@ -998,6 +1041,9 @@ addSafeListener(fileInput, "fileInput", "change", () => {
 });
 
 addSafeListener(sendFileBtn, "sendFileBtn", "click", async () => {
+  if (userRole !== "sender") {
+    return;
+  }
   await sendFiles(fileInput.files);
 });
 
