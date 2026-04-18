@@ -90,7 +90,7 @@
       <!-- Visible only in send flow -->
       <div id="sendControls">
         <label class="input-label" for="fileInput">Choose File</label>
-        <input id="fileInput" type="file" />
+        <input id="fileInput" type="file" multiple />
         <p id="selectedFileName">📄 Select a file to start sharing</p>
         <button id="sendFileBtn" class="btn btn-green">Send File</button>
       </div>
@@ -99,6 +99,10 @@
       <div id="receiveInfo" class="hidden-block">
         <p class="helper-text">Ready to receive. Waiting for sender to start transfer.</p>
       </div>
+
+      <p id="currentTransferFileText" class="helper-text">Current file: none</p>
+      <div id="fileTransferList" class="file-transfer-list hidden-block"></div>
+      <p id="totalProgressText" class="helper-text">Total progress: 0%</p>
 
       <p id="fileStatusText">File Status: idle</p>
       <div class="progress-track">

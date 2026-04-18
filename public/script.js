@@ -72,6 +72,9 @@ const fileStatusText = document.getElementById("fileStatusText");
 const fileProgressFill = document.getElementById("fileProgressFill");
 const fileProgressValue = document.getElementById("fileProgressValue");
 const fileProgressText = document.getElementById("fileProgressText");
+const currentTransferFileText = document.getElementById("currentTransferFileText");
+const fileTransferList = document.getElementById("fileTransferList");
+const totalProgressText = document.getElementById("totalProgressText");
 
 // -----------------------------
 // APP STATE
@@ -85,14 +88,24 @@ let peerConnection = null;
 let dataChannel = null;
 
 // File transfer state (simple one-file flow)
-const CHUNK_SIZE = 16 * 1024; // 16KB
+const CHUNK_SIZE = 64 * 1024; // 64KB
+const BUFFER_PAUSE_THRESHOLD = 1024 * 1024; // 1MB
+const BUFFER_LOW_THRESHOLD = 64 * 1024; // 64KB
+const LARGE_FILE_WARNING_SIZE = 200 * 1024 * 1024; // 200MB
+const EXTREME_FILE_BLOCK_SIZE = 500 * 1024 * 1024; // 500MB
 let incomingFileInfo = null;
 let receivedChunks = [];
 let receivedBytes = 0;
+let incomingFileMarkedComplete = false;
 let waitingDotsTimer = null;
 let connectionTimeoutTimer = null;
 let retryRoomId = null;
 let transferDirectionText = "Progress";
+let isSendingFiles = false;
+let hasBlockedLargeFile = false;
+let transferItems = [];
+let totalTransferredBytes = 0;
+let totalTransferBytes = 0;
 
 // STUN config
 const rtcConfig = {
@@ -184,11 +197,13 @@ function showConnectedStep() {
     sendControls.classList.remove("hidden-block");
     receiveInfo.classList.add("hidden-block");
     selectedFileName.textContent = "📄 Select a file to start sharing";
+    setCurrentTransferFile("Current file: none");
   } else {
     transferTitle.textContent = "Step 3: Connected - Ready to Receive";
     sendControls.classList.add("hidden-block");
     receiveInfo.classList.remove("hidden-block");
     selectedFileName.textContent = "Receiving: waiting for file...";
+    setCurrentTransferFile("Current file: waiting for sender");
   }
 
   statusText.textContent = "";
@@ -200,8 +215,16 @@ function resetTransferUi() {
   } else {
     logMissingElement("fileInput");
   }
+  isSendingFiles = false;
+  hasBlockedLargeFile = false;
   transferDirectionText = "Progress";
+  transferItems = [];
+  totalTransferredBytes = 0;
+  totalTransferBytes = 0;
   setProgress(0);
+  renderTransferList();
+  updateTotalProgressText();
+  setCurrentTransferFile("Current file: none");
   if (fileStatusText) {
     fileStatusText.textContent = "File Status: idle";
   } else {
@@ -367,6 +390,111 @@ function setProgress(percent) {
   }
 }
 
+function formatFileSize(bytes) {
+  if (!bytes) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function setCurrentTransferFile(text) {
+  if (!currentTransferFileText) {
+    logMissingElement("currentTransferFileText");
+    return;
+  }
+  currentTransferFileText.textContent = text;
+}
+
+function updateTotalProgressText() {
+  if (!totalProgressText) {
+    logMissingElement("totalProgressText");
+    return;
+  }
+  if (!totalTransferBytes) {
+    totalProgressText.textContent = "Total progress: 0%";
+    return;
+  }
+  const percent = Math.min(100, Math.floor((totalTransferredBytes / totalTransferBytes) * 100));
+  totalProgressText.textContent = `Total progress: ${percent}%`;
+}
+
+function renderTransferList() {
+  if (!fileTransferList) {
+    logMissingElement("fileTransferList");
+    return;
+  }
+
+  if (transferItems.length === 0) {
+    fileTransferList.classList.add("hidden-block");
+    fileTransferList.innerHTML = "";
+    return;
+  }
+
+  fileTransferList.classList.remove("hidden-block");
+  fileTransferList.innerHTML = transferItems
+    .map(
+      (item) => `
+        <div class="file-item">
+          <div class="file-item-head">
+            <span class="file-item-name">${escapeHtml(item.name)}</span>
+            <span class="file-item-size">${formatFileSize(item.size)}</span>
+          </div>
+          <div class="file-item-progress">
+            <div class="file-item-fill" style="width: ${item.progress}%"></div>
+          </div>
+          <div class="file-item-status">${escapeHtml(item.status)} (${item.progress}%)</div>
+        </div>
+      `
+    )
+    .join("");
+}
+
+function updateTransferItemProgress(itemIndex, progress, status) {
+  const item = transferItems[itemIndex];
+  if (!item) return;
+  item.progress = progress;
+  item.status = status;
+  renderTransferList();
+}
+
+function validateSelectedFiles(files, showMessages) {
+  const fileList = Array.from(files || []);
+  let hasLargeWarning = false;
+  let blockedFile = null;
+
+  for (const file of fileList) {
+    if (file.size > EXTREME_FILE_BLOCK_SIZE) {
+      blockedFile = file;
+      break;
+    }
+    if (file.size > LARGE_FILE_WARNING_SIZE) {
+      hasLargeWarning = true;
+    }
+  }
+
+  if (blockedFile && showMessages) {
+    fileStatusText.textContent = `File Status: ${blockedFile.name} is too large. Max allowed is 500MB`;
+    showToast("Extremely large file is blocked", "error");
+  } else if (hasLargeWarning && showMessages) {
+    fileStatusText.textContent = "Large file may fail on unstable networks";
+    showToast("Large file may fail on unstable networks", "info");
+  }
+
+  return {
+    hasLargeWarning,
+    blockedFile
+  };
+}
+
 function updateSendFileButtonState() {
   if (!fileInput) {
     logMissingElement("fileInput");
@@ -378,7 +506,8 @@ function updateSendFileButtonState() {
   }
 
   const hasFile = fileInput.files && fileInput.files.length > 0;
-  sendFileBtn.disabled = !(currentFlow === "send" && hasFile && isPeerConnected);
+  sendFileBtn.disabled =
+    !(currentFlow === "send" && hasFile && isPeerConnected) || isSendingFiles || hasBlockedLargeFile;
 }
 
 function setCreateRoomButtonDisabled(disabled) {
@@ -441,6 +570,45 @@ function createPeerConnection() {
 }
 
 function setupDataChannelEvents(channel) {
+  channel.bufferedAmountLowThreshold = BUFFER_LOW_THRESHOLD;
+
+  function completeIncomingFile() {
+    if (!incomingFileInfo) return;
+
+    const completedFileInfo = incomingFileInfo;
+    const blob = new Blob(receivedChunks);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = completedFileInfo.name;
+    link.click();
+    URL.revokeObjectURL(url);
+
+    fileStatusText.textContent =
+      "File Status: File received successfully (" +
+      completedFileInfo.fileIndex +
+      "/" +
+      completedFileInfo.totalFiles +
+      ")";
+    setProgress(100);
+    updateTransferItemProgress(completedFileInfo.fileIndex - 1, 100, "Received");
+    showToast("File received", "success");
+
+    incomingFileInfo = null;
+    receivedChunks = [];
+    receivedBytes = 0;
+    incomingFileMarkedComplete = false;
+
+    if (completedFileInfo.fileIndex >= completedFileInfo.totalFiles) {
+      setCurrentTransferFile("Current file: all files received");
+      setTimeout(() => {
+        resetTransferUi();
+      }, 1200);
+    } else {
+      setCurrentTransferFile("Current file: waiting for next file");
+    }
+  }
+
   channel.onopen = () => {
     updateSendFileButtonState();
   };
@@ -460,13 +628,50 @@ function setupDataChannelEvents(channel) {
       }
 
       if (meta && meta.type === "file-meta") {
-        incomingFileInfo = { name: meta.name, size: meta.size };
+        const isFirstIncomingFile = (meta.fileIndex || 1) === 1;
+        if (isFirstIncomingFile) {
+          transferItems = [];
+          totalTransferredBytes = 0;
+          totalTransferBytes = 0;
+        }
+
+        incomingFileInfo = {
+          name: meta.name,
+          size: meta.size,
+          fileIndex: meta.fileIndex || 1,
+          totalFiles: meta.totalFiles || 1
+        };
         receivedChunks = [];
         receivedBytes = 0;
+        incomingFileMarkedComplete = false;
         transferDirectionText = "Receiving...";
-        fileStatusText.textContent = "File Status: Receiving file...";
+        fileStatusText.textContent =
+          "File Status: Receiving file " +
+          incomingFileInfo.fileIndex +
+          " of " +
+          incomingFileInfo.totalFiles;
         selectedFileName.textContent = "Receiving: " + incomingFileInfo.name;
+        setCurrentTransferFile(
+          `Current file: Receiving ${incomingFileInfo.name} (${incomingFileInfo.fileIndex}/${incomingFileInfo.totalFiles})`
+        );
+        transferItems.push({
+          name: incomingFileInfo.name,
+          size: incomingFileInfo.size,
+          progress: 0,
+          status: "Receiving"
+        });
+        totalTransferBytes += incomingFileInfo.size;
+        renderTransferList();
+        updateTotalProgressText();
         setProgress(0);
+        return;
+      }
+
+      if (meta && meta.type === "file-complete" && incomingFileInfo) {
+        incomingFileMarkedComplete = true;
+        if (receivedBytes >= incomingFileInfo.size) {
+          completeIncomingFile();
+        }
       }
       return;
     }
@@ -490,30 +695,33 @@ function setupDataChannelEvents(channel) {
       Math.floor((receivedBytes / incomingFileInfo.size) * 100)
     );
     setProgress(receivePercent);
+    updateTransferItemProgress(incomingFileInfo.fileIndex - 1, receivePercent, "Receiving");
+    totalTransferredBytes += chunkBuffer.byteLength;
+    updateTotalProgressText();
 
-    // Done: combine + auto download
-    if (receivedBytes >= incomingFileInfo.size) {
-      const blob = new Blob(receivedChunks);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = incomingFileInfo.name;
-      link.click();
-      URL.revokeObjectURL(url);
-
-      fileStatusText.textContent = "File Status: File received successfully";
-      setProgress(100);
-      showToast("File received", "success");
-
-      incomingFileInfo = null;
-      receivedChunks = [];
-      receivedBytes = 0;
-
-      setTimeout(() => {
-        resetTransferUi();
-      }, 1200);
+    // Complete file when full data is received and sender marks last chunk done
+    if (receivedBytes >= incomingFileInfo.size && incomingFileMarkedComplete) {
+      completeIncomingFile();
     }
   };
+}
+
+function waitForBufferedAmountLow(channel) {
+  return new Promise((resolve) => {
+    if (channel.bufferedAmount <= BUFFER_LOW_THRESHOLD) {
+      resolve();
+      return;
+    }
+
+    const previousHandler = channel.onbufferedamountlow;
+    channel.onbufferedamountlow = () => {
+      channel.onbufferedamountlow = previousHandler;
+      if (typeof previousHandler === "function") {
+        previousHandler();
+      }
+      resolve();
+    };
+  });
 }
 
 // -----------------------------
@@ -631,25 +839,69 @@ addSafeListener(roomInput, "roomInput", "keydown", (event) => {
   }
 });
 
-// -----------------------------
-// FILE SEND ACTION (STEP 3 SEND)
-// -----------------------------
-addSafeListener(fileInput, "fileInput", "change", () => {
-  if (fileInput.files.length > 0) {
-    selectedFileName.textContent = "Sending: " + fileInput.files[0].name;
-    fileStatusText.textContent = "File Status: ready to send";
-  } else {
-    selectedFileName.textContent = "📄 Select a file to start sharing";
-    fileStatusText.textContent = "File Status: idle";
-  }
-  setProgress(0);
-  updateSendFileButtonState();
-});
+async function sendSingleFile(file, fileIndex, totalFiles) {
+  dataChannel.send(
+    JSON.stringify({
+      type: "file-meta",
+      name: file.name,
+      size: file.size,
+      fileIndex,
+      totalFiles
+    })
+  );
 
-addSafeListener(sendFileBtn, "sendFileBtn", "click", () => {
-  const file = fileInput.files[0];
-  if (!file) {
-    fileStatusText.textContent = "File Status: Please choose a file first";
+  fileStatusText.textContent = `File Status: Sending file ${fileIndex} of ${totalFiles}`;
+  selectedFileName.textContent = "Sending: " + file.name;
+  setCurrentTransferFile(`Current file: Sending ${file.name} (${fileIndex}/${totalFiles})`);
+  transferDirectionText = "Sending...";
+  updateTransferItemProgress(fileIndex - 1, 0, "Sending");
+  setProgress(0);
+
+  let sentBytes = 0;
+  for (let offset = 0; offset < file.size; offset += CHUNK_SIZE) {
+    while (dataChannel.bufferedAmount > BUFFER_PAUSE_THRESHOLD) {
+      await waitForBufferedAmountLow(dataChannel);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    const chunkBlob = file.slice(offset, offset + CHUNK_SIZE);
+    const chunk = await chunkBlob.arrayBuffer();
+    dataChannel.send(chunk);
+    sentBytes += chunk.byteLength;
+
+    const sendPercent = Math.min(100, Math.floor((sentBytes / file.size) * 100));
+    setProgress(sendPercent);
+    updateTransferItemProgress(fileIndex - 1, sendPercent, "Sending");
+    totalTransferredBytes += chunk.byteLength;
+    updateTotalProgressText();
+
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+
+  updateTransferItemProgress(fileIndex - 1, 100, "Sent");
+
+  dataChannel.send(
+    JSON.stringify({
+      type: "file-complete",
+      name: file.name,
+      size: file.size,
+      fileIndex,
+      totalFiles
+    })
+  );
+}
+
+async function sendFiles(files) {
+  const filesToSend = Array.from(files || []);
+  if (filesToSend.length === 0) {
+    fileStatusText.textContent = "File Status: Please choose file(s) first";
+    return;
+  }
+
+  const { blockedFile } = validateSelectedFiles(filesToSend, true);
+  hasBlockedLargeFile = !!blockedFile;
+  if (hasBlockedLargeFile) {
+    updateSendFileButtonState();
     return;
   }
 
@@ -658,50 +910,95 @@ addSafeListener(sendFileBtn, "sendFileBtn", "click", () => {
     return;
   }
 
-  const reader = new FileReader();
-  reader.onload = async () => {
-    const fileBuffer = reader.result;
+  if (transferItems.length === 0) {
+    transferItems = filesToSend.map((file) => ({
+      name: file.name,
+      size: file.size,
+      progress: 0,
+      status: "Pending"
+    }));
+    renderTransferList();
+  }
+  totalTransferBytes = filesToSend.reduce((sum, file) => sum + file.size, 0);
+  totalTransferredBytes = 0;
+  updateTotalProgressText();
 
-    // Send metadata first
-    dataChannel.send(
-      JSON.stringify({
-        type: "file-meta",
-        name: file.name,
-        size: file.size
-      })
-    );
+  isSendingFiles = true;
+  updateSendFileButtonState();
 
-    fileStatusText.textContent = "File Status: Sending file...";
-    selectedFileName.textContent = "Sending: " + file.name;
-    transferDirectionText = "Sending...";
-    setProgress(0);
-
-    let sentBytes = 0;
-    for (let offset = 0; offset < fileBuffer.byteLength; offset += CHUNK_SIZE) {
-      const chunk = fileBuffer.slice(offset, offset + CHUNK_SIZE);
-      dataChannel.send(chunk);
-      sentBytes += chunk.byteLength;
-
-      const sendPercent = Math.min(
-        100,
-        Math.floor((sentBytes / fileBuffer.byteLength) * 100)
-      );
-      setProgress(sendPercent);
-
-      // Tiny pause gives smooth UI update
-      await new Promise((resolve) => setTimeout(resolve, 0));
+  try {
+    for (let index = 0; index < filesToSend.length; index += 1) {
+      const file = filesToSend[index];
+      await sendSingleFile(file, index + 1, filesToSend.length);
     }
 
-    fileStatusText.textContent = "File Status: File sent successfully";
+    fileStatusText.textContent = `File Status: ${filesToSend.length} file(s) sent successfully`;
+    setCurrentTransferFile("Current file: all files sent");
     setProgress(100);
     showToast("File sent successfully", "success");
 
     setTimeout(() => {
       resetTransferUi();
     }, 1200);
-  };
+  } finally {
+    isSendingFiles = false;
+    updateSendFileButtonState();
+  }
+}
 
-  reader.readAsArrayBuffer(file);
+// -----------------------------
+// FILE SEND ACTION (STEP 3 SEND)
+// -----------------------------
+addSafeListener(fileInput, "fileInput", "change", () => {
+  if (fileInput.files.length > 0) {
+    const { hasLargeWarning, blockedFile } = validateSelectedFiles(fileInput.files, false);
+    hasBlockedLargeFile = !!blockedFile;
+
+    const firstFileName = fileInput.files[0].name;
+    const remainingCount = fileInput.files.length - 1;
+    if (remainingCount > 0) {
+      selectedFileName.textContent = `Sending: ${firstFileName} (+${remainingCount} more)`;
+    } else {
+      selectedFileName.textContent = "Sending: " + firstFileName;
+    }
+    if (hasBlockedLargeFile) {
+      fileStatusText.textContent = `File Status: ${blockedFile.name} is too large. Max allowed is 500MB`;
+      showToast("Extremely large file is blocked", "error");
+    } else if (hasLargeWarning) {
+      fileStatusText.textContent = "Large file may fail on unstable networks";
+      showToast("Large file may fail on unstable networks", "info");
+    } else {
+      fileStatusText.textContent = `File Status: Ready to send ${fileInput.files.length} file(s)`;
+    }
+
+    transferItems = Array.from(fileInput.files).map((file) => ({
+      name: file.name,
+      size: file.size,
+      progress: 0,
+      status: file.size > EXTREME_FILE_BLOCK_SIZE ? "Blocked: too large" : "Pending"
+    }));
+    totalTransferBytes = transferItems.reduce((sum, item) => sum + item.size, 0);
+    totalTransferredBytes = 0;
+    renderTransferList();
+    updateTotalProgressText();
+    setCurrentTransferFile("Current file: none");
+  } else {
+    selectedFileName.textContent = "📄 Select a file to start sharing";
+    fileStatusText.textContent = "File Status: idle";
+    hasBlockedLargeFile = false;
+    transferItems = [];
+    totalTransferBytes = 0;
+    totalTransferredBytes = 0;
+    renderTransferList();
+    updateTotalProgressText();
+    setCurrentTransferFile("Current file: none");
+  }
+  setProgress(0);
+  updateSendFileButtonState();
+});
+
+addSafeListener(sendFileBtn, "sendFileBtn", "click", async () => {
+  await sendFiles(fileInput.files);
 });
 
 // -----------------------------
