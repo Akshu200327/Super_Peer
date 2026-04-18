@@ -225,9 +225,10 @@ input:focus {
   padding: 11px;
   margin-top: 8px;
   border-radius: 11px;
-  color: #f8fafc;
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(15, 23, 42, 0.45);
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 700;
   cursor: pointer;
   transition:
     transform 0.22s ease,
@@ -251,7 +252,7 @@ button:disabled {
 }
 
 .btn-green {
-  background: linear-gradient(135deg, #22d3ee, #22c55e);
+  background: linear-gradient(135deg, #06b6d4, #16a34a);
 }
 
 .btn-blue {
