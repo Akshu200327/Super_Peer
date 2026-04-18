@@ -90,9 +90,11 @@
 
       <!-- Visible only in send flow -->
       <div id="sendControls">
-        <label class="input-label" for="fileInput">Choose File</label>
-        <input id="fileInput" type="file" multiple />
-        <p id="selectedFileName">📄 Select a file to start sharing</p>
+        <div id="fileInputContainer">
+          <label class="input-label" for="fileInput">Choose File</label>
+          <input id="fileInput" type="file" multiple />
+          <p id="selectedFileName">📄 Select a file to start sharing</p>
+        </div>
         <button id="sendFileBtn" class="btn btn-green">Send File</button>
       </div>
 

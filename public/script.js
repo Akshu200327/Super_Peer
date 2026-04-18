@@ -67,6 +67,7 @@ const roleStatusText = document.getElementById("roleStatusText");
 const sendControls = document.getElementById("sendControls");
 const receiveInfo = document.getElementById("receiveInfo");
 const receiveInfoText = document.getElementById("receiveInfoText");
+const fileInputContainer = document.getElementById("fileInputContainer");
 const fileInput = document.getElementById("fileInput");
 const selectedFileName = document.getElementById("selectedFileName");
 const sendFileBtn = document.getElementById("sendFileBtn");
@@ -189,11 +190,31 @@ function showScreen(screenElement) {
   }
 }
 
+function updateRoleUI() {
+  if (!fileInputContainer) {
+    logMissingElement("fileInputContainer");
+    return;
+  }
+  if (!sendFileBtn) {
+    logMissingElement("sendFileBtn");
+    return;
+  }
+
+  if (userRole === "sender") {
+    fileInputContainer.style.display = "block";
+    sendFileBtn.style.display = "block";
+  } else {
+    fileInputContainer.style.display = "none";
+    sendFileBtn.style.display = "none";
+  }
+}
+
 // Step 3 is shared. In send mode, show file picker.
 // In receive mode, show waiting info only.
 function showConnectedStep() {
   showScreen(transferScreen);
   hideConnectionFailure();
+  updateRoleUI();
 
   if (userRole === "sender") {
     transferTitle.textContent = "Step 3: Connected - Send File";
@@ -214,7 +235,7 @@ function showConnectedStep() {
   } else {
     transferTitle.textContent = "Step 3: Connected - Ready to Receive";
     if (roleStatusText) {
-      roleStatusText.textContent = "Waiting to receive files";
+      roleStatusText.textContent = "You are Receiver - waiting for files";
     } else {
       logMissingElement("roleStatusText");
     }
@@ -792,6 +813,7 @@ addSafeListener(disconnectBtn, "disconnectBtn", "click", () => {
 addSafeListener(sendModeBtn, "sendModeBtn", "click", () => {
   currentFlow = "send";
   userRole = "sender";
+  updateRoleUI();
   isCreator = true;
   currentRoomId = null;
   retryRoomId = null;
@@ -809,6 +831,7 @@ addSafeListener(sendModeBtn, "sendModeBtn", "click", () => {
 addSafeListener(receiveModeBtn, "receiveModeBtn", "click", () => {
   currentFlow = "receive";
   userRole = "receiver";
+  updateRoleUI();
   isCreator = false;
   currentRoomId = null;
   retryRoomId = null;
