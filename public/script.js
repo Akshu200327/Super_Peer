@@ -65,20 +65,21 @@ const joinRoomBtn = document.getElementById("joinRoomBtn");
 const transferTitle = document.getElementById("transferTitle");
 const roleStatusText = document.getElementById("roleStatusText");
 const sendControls = document.getElementById("sendControls");
-const receiveInfo = document.getElementById("receiveInfo");
-const receiveInfoText = document.getElementById("receiveInfoText");
+const connectedPanel = document.getElementById("connectedPanel");
+const previewPanel = document.getElementById("previewPanel");
+const progressPanel = document.getElementById("progressPanel");
+const completedPanel = document.getElementById("completedPanel");
+const sendingAnimationText = document.getElementById("sendingAnimationText");
+const completionMessage = document.getElementById("completionMessage");
+const resetTransferBtn = document.getElementById("resetTransferBtn");
 const fileInputContainer = document.getElementById("fileInputContainer");
 const fileInput = document.getElementById("fileInput");
-const selectedFileName = document.getElementById("selectedFileName");
 const filePreviewList = document.getElementById("filePreviewList");
 const sendFileBtn = document.getElementById("sendFileBtn");
-const fileStatusText = document.getElementById("fileStatusText");
-const fileProgressFill = document.getElementById("fileProgressFill");
-const fileProgressValue = document.getElementById("fileProgressValue");
-const fileProgressText = document.getElementById("fileProgressText");
-const currentTransferFileText = document.getElementById("currentTransferFileText");
 const fileTransferList = document.getElementById("fileTransferList");
-const totalProgressText = document.getElementById("totalProgressText");
+const totalProgressTrack = document.getElementById("totalProgressTrack");
+const totalProgressFill = document.getElementById("totalProgressFill");
+const totalProgressValue = document.getElementById("totalProgressValue");
 
 // -----------------------------
 // APP STATE
@@ -106,12 +107,19 @@ let incomingFileMarkedComplete = false;
 let waitingDotsTimer = null;
 let connectionTimeoutTimer = null;
 let retryRoomId = null;
-let transferDirectionText = "Progress";
 let isSendingFiles = false;
 let hasBlockedLargeFile = false;
 let transferItems = [];
 let totalTransferredBytes = 0;
 let totalTransferBytes = 0;
+const TRANSFER_UI_STATES = {
+  MODE_SELECTION: "mode-selection",
+  CONNECTED: "connected",
+  FILES_SELECTED: "files-selected",
+  SENDING: "sending",
+  COMPLETED: "completed"
+};
+let transferUiState = TRANSFER_UI_STATES.MODE_SELECTION;
 
 // STUN config
 const rtcConfig = {
@@ -193,21 +201,10 @@ function showScreen(screenElement) {
 }
 
 function updateRoleUI() {
-  if (!fileInputContainer) {
-    logMissingElement("fileInputContainer");
-    return;
-  }
-  if (!sendFileBtn) {
-    logMissingElement("sendFileBtn");
-    return;
-  }
-
-  if (userRole === "sender") {
-    fileInputContainer.style.display = "block";
-    sendFileBtn.style.display = "block";
+  if (fileInput) {
+    fileInput.disabled = userRole !== "sender";
   } else {
-    fileInputContainer.style.display = "none";
-    sendFileBtn.style.display = "none";
+    logMissingElement("fileInput");
   }
 }
 
@@ -219,39 +216,18 @@ function showConnectedStep() {
   updateRoleUI();
 
   if (userRole === "sender") {
-    transferTitle.textContent = "Step 3: Connected - Send File";
-    if (roleStatusText) {
-      roleStatusText.textContent = "Ready to send files";
-    } else {
-      logMissingElement("roleStatusText");
-    }
-    sendControls.classList.remove("hidden-block");
-    receiveInfo.classList.add("hidden-block");
-    selectedFileName.textContent = EMPTY_FILE_PROMPT;
-    renderFilePreview([]);
-    setCurrentTransferFile("Current file: none");
+    transferTitle.textContent = "Send files";
+    setTransferStatus("");
+    setTransferUiState(TRANSFER_UI_STATES.CONNECTED);
     if (sendFileBtn) {
       sendFileBtn.disabled = true;
     } else {
       logMissingElement("sendFileBtn");
     }
   } else {
-    transferTitle.textContent = "Step 3: Connected - Ready to Receive";
-    if (roleStatusText) {
-      roleStatusText.textContent = "You are Receiver - waiting for files";
-    } else {
-      logMissingElement("roleStatusText");
-    }
-    sendControls.classList.add("hidden-block");
-    receiveInfo.classList.remove("hidden-block");
-    if (receiveInfoText) {
-      receiveInfoText.textContent = "Waiting for sender...";
-    } else {
-      logMissingElement("receiveInfoText");
-    }
-    selectedFileName.textContent = "Receiving: waiting for file...";
-    renderFilePreview([]);
-    setCurrentTransferFile("Current file: waiting for sender");
+    transferTitle.textContent = "Receiving files...";
+    setTransferStatus("Waiting for sender...");
+    setTransferUiState(TRANSFER_UI_STATES.CONNECTED);
     if (sendFileBtn) {
       sendFileBtn.disabled = true;
     } else {
@@ -271,27 +247,14 @@ function resetTransferUi() {
   }
   isSendingFiles = false;
   hasBlockedLargeFile = false;
-  transferDirectionText = "Progress";
   transferItems = [];
   totalTransferredBytes = 0;
   totalTransferBytes = 0;
   setProgress(0);
   renderTransferList();
-  updateTotalProgressText();
-  setCurrentTransferFile("Current file: none");
-  if (fileStatusText) {
-    fileStatusText.textContent = "File Status: idle";
-  } else {
-    logMissingElement("fileStatusText");
-  }
-
-  if (!selectedFileName) {
-    logMissingElement("selectedFileName");
-  } else if (currentFlow === "send") {
-    selectedFileName.textContent = EMPTY_FILE_PROMPT;
-  } else {
-    selectedFileName.textContent = "Receiving: waiting for file...";
-  }
+  updateTotalProgressUi();
+  setTransferStatus(userRole === "receiver" && isPeerConnected ? "Waiting for sender..." : "");
+  setTransferUiState(isPeerConnected ? TRANSFER_UI_STATES.CONNECTED : TRANSFER_UI_STATES.MODE_SELECTION);
   renderFilePreview([]);
   if (fileInputContainer) {
     fileInputContainer.classList.remove("drag-active");
@@ -412,6 +375,86 @@ function showToast(message, type = "info") {
   }, 3000);
 }
 
+function setTransferStatus(text) {
+  if (!roleStatusText) {
+    logMissingElement("roleStatusText");
+    return;
+  }
+  roleStatusText.textContent = text || "";
+  roleStatusText.classList.toggle("hidden-block", !text);
+}
+
+function setInlineStatus(text) {
+  if (!statusText) {
+    logMissingElement("statusText");
+    return;
+  }
+  statusText.textContent = text || "";
+}
+
+function setTransferUiState(nextState) {
+  transferUiState = nextState;
+
+  if (transferScreen) {
+    transferScreen.dataset.uiState = nextState;
+  } else {
+    logMissingElement("transferScreen");
+  }
+
+  const isSender = userRole === "sender";
+  const showConnectedPanel = isSender && nextState === TRANSFER_UI_STATES.CONNECTED;
+  const showPreviewPanel = isSender && nextState === TRANSFER_UI_STATES.FILES_SELECTED;
+  const showProgressPanel = nextState === TRANSFER_UI_STATES.SENDING;
+  const showCompletedPanel = nextState === TRANSFER_UI_STATES.COMPLETED;
+
+  if (sendControls) {
+    sendControls.classList.toggle("hidden-block", !isSender);
+  } else {
+    logMissingElement("sendControls");
+  }
+  if (connectedPanel) {
+    connectedPanel.classList.toggle("hidden-block", !showConnectedPanel);
+  } else {
+    logMissingElement("connectedPanel");
+  }
+  if (previewPanel) {
+    previewPanel.classList.toggle("hidden-block", !showPreviewPanel);
+  } else {
+    logMissingElement("previewPanel");
+  }
+  if (progressPanel) {
+    progressPanel.classList.toggle("hidden-block", !showProgressPanel);
+  } else {
+    logMissingElement("progressPanel");
+  }
+  if (completedPanel) {
+    completedPanel.classList.toggle("hidden-block", !showCompletedPanel);
+  } else {
+    logMissingElement("completedPanel");
+  }
+
+  if (sendFileBtn) {
+    sendFileBtn.classList.toggle("hidden-block", !showPreviewPanel);
+  } else {
+    logMissingElement("sendFileBtn");
+  }
+
+  if (completionMessage) {
+    completionMessage.textContent = userRole === "sender" ? "Files sent successfully." : "Files received successfully.";
+  } else {
+    logMissingElement("completionMessage");
+  }
+
+  if (sendingAnimationText) {
+    sendingAnimationText.textContent = userRole === "sender" ? "Sending files..." : "Receiving files...";
+  } else {
+    logMissingElement("sendingAnimationText");
+  }
+
+  renderTransferList();
+  updateTotalProgressUi();
+}
+
 // "Waiting for receiver..." dots animation
 function startWaitingDots() {
   if (waitingDotsTimer) return;
@@ -432,20 +475,15 @@ function stopWaitingDots() {
 
 function setProgress(percent) {
   const safePercent = Math.max(0, Math.min(100, percent));
-  if (fileProgressFill) {
-    fileProgressFill.style.width = safePercent + "%";
+  if (totalProgressFill) {
+    totalProgressFill.style.width = safePercent + "%";
   } else {
-    logMissingElement("fileProgressFill");
+    logMissingElement("totalProgressFill");
   }
-  if (fileProgressValue) {
-    fileProgressValue.textContent = safePercent + "%";
+  if (totalProgressValue) {
+    totalProgressValue.textContent = safePercent + "%";
   } else {
-    logMissingElement("fileProgressValue");
-  }
-  if (fileProgressText) {
-    fileProgressText.textContent = `${transferDirectionText}: ${safePercent}%`;
-  } else {
-    logMissingElement("fileProgressText");
+    logMissingElement("totalProgressValue");
   }
 }
 
@@ -474,25 +512,28 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
-function setCurrentTransferFile(text) {
-  if (!currentTransferFileText) {
-    logMissingElement("currentTransferFileText");
+function updateTotalProgressUi() {
+  if (!totalProgressTrack) {
+    logMissingElement("totalProgressTrack");
     return;
   }
-  currentTransferFileText.textContent = text;
-}
 
-function updateTotalProgressText() {
-  if (!totalProgressText) {
-    logMissingElement("totalProgressText");
+  const hasTransfer = totalTransferBytes > 0;
+  const allowVisible = transferUiState === TRANSFER_UI_STATES.SENDING;
+  totalProgressTrack.classList.toggle("hidden-block", !allowVisible || !hasTransfer);
+
+  if (!hasTransfer) {
+    setProgress(0);
     return;
   }
+
   if (!totalTransferBytes) {
-    totalProgressText.textContent = "Total progress: 0%";
+    setProgress(0);
     return;
   }
+
   const percent = Math.min(100, Math.floor((totalTransferredBytes / totalTransferBytes) * 100));
-  totalProgressText.textContent = `Total progress: ${percent}%`;
+  setProgress(percent);
 }
 
 function renderTransferList() {
@@ -501,13 +542,15 @@ function renderTransferList() {
     return;
   }
 
-  if (transferItems.length === 0) {
-    fileTransferList.classList.add("hidden-block");
+  const hasItems = transferItems.length > 0;
+  const allowVisible = transferUiState === TRANSFER_UI_STATES.SENDING;
+  fileTransferList.classList.toggle("hidden-block", !hasItems || !allowVisible);
+
+  if (!hasItems) {
     fileTransferList.innerHTML = "";
     return;
   }
 
-  fileTransferList.classList.remove("hidden-block");
   fileTransferList.innerHTML = transferItems
     .map(
       (item) => `
@@ -560,21 +603,14 @@ function processSelectedFiles(files) {
     const { hasLargeWarning, blockedFile } = validateSelectedFiles(fileList, false);
     hasBlockedLargeFile = !!blockedFile;
 
-    const firstFileName = fileList[0].name;
-    const remainingCount = fileList.length - 1;
-    if (remainingCount > 0) {
-      selectedFileName.textContent = `Sending: ${firstFileName} (+${remainingCount} more)`;
-    } else {
-      selectedFileName.textContent = "Sending: " + firstFileName;
-    }
     if (hasBlockedLargeFile) {
-      fileStatusText.textContent = `File Status: ${blockedFile.name} is too large. Max allowed is 500MB`;
+      setInlineStatus(`${blockedFile.name} is too large. Max allowed is 500MB`);
       showToast("Extremely large file is blocked", "error");
     } else if (hasLargeWarning) {
-      fileStatusText.textContent = "Large file may fail on unstable networks";
+      setInlineStatus("Large file may fail on unstable networks");
       showToast("Large file may fail on unstable networks", "info");
     } else {
-      fileStatusText.textContent = `File Status: Ready to send ${fileList.length} file(s)`;
+      setInlineStatus("");
     }
 
     transferItems = fileList.map((file) => ({
@@ -585,22 +621,16 @@ function processSelectedFiles(files) {
     }));
     totalTransferBytes = transferItems.reduce((sum, item) => sum + item.size, 0);
     totalTransferredBytes = 0;
-    renderTransferList();
-    updateTotalProgressText();
-    setCurrentTransferFile("Current file: none");
+    setTransferUiState(TRANSFER_UI_STATES.FILES_SELECTED);
   } else {
-    selectedFileName.textContent = EMPTY_FILE_PROMPT;
-    fileStatusText.textContent = "File Status: idle";
+    setInlineStatus("");
     hasBlockedLargeFile = false;
     transferItems = [];
     totalTransferBytes = 0;
     totalTransferredBytes = 0;
-    renderTransferList();
-    updateTotalProgressText();
-    setCurrentTransferFile("Current file: none");
+    setTransferUiState(TRANSFER_UI_STATES.CONNECTED);
   }
 
-  setProgress(0);
   updateSendFileButtonState();
 }
 
@@ -628,10 +658,10 @@ function validateSelectedFiles(files, showMessages) {
   }
 
   if (blockedFile && showMessages) {
-    fileStatusText.textContent = `File Status: ${blockedFile.name} is too large. Max allowed is 500MB`;
+    setInlineStatus(`${blockedFile.name} is too large. Max allowed is 500MB`);
     showToast("Extremely large file is blocked", "error");
   } else if (hasLargeWarning && showMessages) {
-    fileStatusText.textContent = "Large file may fail on unstable networks";
+    setInlineStatus("Large file may fail on unstable networks");
     showToast("Large file may fail on unstable networks", "info");
   }
 
@@ -737,14 +767,10 @@ function setupDataChannelEvents(channel) {
     link.click();
     URL.revokeObjectURL(url);
 
-    fileStatusText.textContent =
-      "File Status: File received successfully (" +
-      completedFileInfo.fileIndex +
-      "/" +
-      completedFileInfo.totalFiles +
-      ")";
-    setProgress(100);
+    setInlineStatus("");
+    setTransferStatus("Receiving files...");
     updateTransferItemProgress(completedFileInfo.fileIndex - 1, 100, "Received");
+    updateTotalProgressUi();
     showToast("File received", "success");
 
     incomingFileInfo = null;
@@ -753,12 +779,8 @@ function setupDataChannelEvents(channel) {
     incomingFileMarkedComplete = false;
 
     if (completedFileInfo.fileIndex >= completedFileInfo.totalFiles) {
-      setCurrentTransferFile("Current file: all files received");
-      setTimeout(() => {
-        resetTransferUi();
-      }, 1200);
-    } else {
-      setCurrentTransferFile("Current file: waiting for next file");
+      setTransferStatus("Completed");
+      setTransferUiState(TRANSFER_UI_STATES.COMPLETED);
     }
   }
 
@@ -797,16 +819,9 @@ function setupDataChannelEvents(channel) {
         receivedChunks = [];
         receivedBytes = 0;
         incomingFileMarkedComplete = false;
-        transferDirectionText = "Receiving...";
-        fileStatusText.textContent =
-          "File Status: Receiving file " +
-          incomingFileInfo.fileIndex +
-          " of " +
-          incomingFileInfo.totalFiles;
-        selectedFileName.textContent = "Receiving: " + incomingFileInfo.name;
-        setCurrentTransferFile(
-          `Current file: Receiving ${incomingFileInfo.name} (${incomingFileInfo.fileIndex}/${incomingFileInfo.totalFiles})`
-        );
+        setTransferStatus("Receiving files...");
+        setInlineStatus("");
+        setTransferUiState(TRANSFER_UI_STATES.SENDING);
         transferItems.push({
           name: incomingFileInfo.name,
           size: incomingFileInfo.size,
@@ -815,8 +830,7 @@ function setupDataChannelEvents(channel) {
         });
         totalTransferBytes += incomingFileInfo.size;
         renderTransferList();
-        updateTotalProgressText();
-        setProgress(0);
+        updateTotalProgressUi();
         return;
       }
 
@@ -847,10 +861,9 @@ function setupDataChannelEvents(channel) {
       100,
       Math.floor((receivedBytes / incomingFileInfo.size) * 100)
     );
-    setProgress(receivePercent);
     updateTransferItemProgress(incomingFileInfo.fileIndex - 1, receivePercent, "Receiving");
     totalTransferredBytes += chunkBuffer.byteLength;
-    updateTotalProgressText();
+    updateTotalProgressUi();
 
     // Complete file when full data is received and sender marks last chunk done
     if (receivedBytes >= incomingFileInfo.size && incomingFileMarkedComplete) {
@@ -1007,12 +1020,11 @@ async function sendSingleFile(file, fileIndex, totalFiles) {
     })
   );
 
-  fileStatusText.textContent = `File Status: Sending file ${fileIndex} of ${totalFiles}`;
-  selectedFileName.textContent = "Sending: " + file.name;
-  setCurrentTransferFile(`Current file: Sending ${file.name} (${fileIndex}/${totalFiles})`);
-  transferDirectionText = "Sending...";
+  setTransferStatus("Sending files...");
+  setInlineStatus("");
+  setTransferUiState(TRANSFER_UI_STATES.SENDING);
   updateTransferItemProgress(fileIndex - 1, 0, "Sending");
-  setProgress(0);
+  updateTotalProgressUi();
 
   let sentBytes = 0;
   for (let offset = 0; offset < file.size; offset += CHUNK_SIZE) {
@@ -1027,10 +1039,9 @@ async function sendSingleFile(file, fileIndex, totalFiles) {
     sentBytes += chunk.byteLength;
 
     const sendPercent = Math.min(100, Math.floor((sentBytes / file.size) * 100));
-    setProgress(sendPercent);
     updateTransferItemProgress(fileIndex - 1, sendPercent, "Sending");
     totalTransferredBytes += chunk.byteLength;
-    updateTotalProgressText();
+    updateTotalProgressUi();
 
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
@@ -1060,7 +1071,7 @@ async function sendFiles(files) {
 
   const filesToSend = Array.from(files || []);
   if (filesToSend.length === 0) {
-    fileStatusText.textContent = "File Status: Please choose file(s) first";
+    setInlineStatus("Please choose file(s) first");
     return;
   }
 
@@ -1072,7 +1083,7 @@ async function sendFiles(files) {
   }
 
   if (!dataChannel || dataChannel.readyState !== "open") {
-    fileStatusText.textContent = "File Status: Secure link is still connecting";
+    setInlineStatus("Secure link is still connecting");
     return;
   }
 
@@ -1087,9 +1098,12 @@ async function sendFiles(files) {
   }
   totalTransferBytes = filesToSend.reduce((sum, file) => sum + file.size, 0);
   totalTransferredBytes = 0;
-  updateTotalProgressText();
+  updateTotalProgressUi();
 
   isSendingFiles = true;
+  setTransferStatus("Sending files...");
+  setInlineStatus("");
+  setTransferUiState(TRANSFER_UI_STATES.SENDING);
   updateSendFileButtonState();
 
   try {
@@ -1098,14 +1112,10 @@ async function sendFiles(files) {
       await sendSingleFile(file, index + 1, filesToSend.length);
     }
 
-    fileStatusText.textContent = `File Status: ${filesToSend.length} file(s) sent successfully`;
-    setCurrentTransferFile("Current file: all files sent");
-    setProgress(100);
+    setTransferStatus("Completed");
+    setInlineStatus("");
+    setTransferUiState(TRANSFER_UI_STATES.COMPLETED);
     showToast("File sent successfully", "success");
-
-    setTimeout(() => {
-      resetTransferUi();
-    }, 1200);
   } finally {
     isSendingFiles = false;
     updateSendFileButtonState();
@@ -1175,6 +1185,11 @@ addSafeListener(fileInputContainer, "fileInputContainer", "drop", (event) => {
 
 addSafeListener(sendFileBtn, "sendFileBtn", "click", async () => {
   await sendFiles(fileInput.files);
+});
+
+addSafeListener(resetTransferBtn, "resetTransferBtn", "click", () => {
+  resetTransferUi();
+  setInlineStatus("");
 });
 
 // -----------------------------
@@ -1314,4 +1329,6 @@ setTimeout(() => {
 }, 1200);
 
 // Initial safe state
+setTransferUiState(TRANSFER_UI_STATES.MODE_SELECTION);
+renderFilePreview([]);
 updateSendFileButtonState();

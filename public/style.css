@@ -26,7 +26,7 @@ body {
   transition: background 0.35s ease, color 0.25s ease;
   position: relative;
   isolation: isolate;
-  overflow-x: hidden;
+  overflow: hidden;
 }
 
 body::before,
@@ -60,22 +60,22 @@ body::after {
 .loading-screen,
 .card {
   width: 420px;
-  max-width: 92vw;
-  border-radius: 18px;
-  padding: 28px;
+  max-width: 420px;
+  border-radius: 20px;
+  padding: 24px;
   border: 1px solid var(--glass-border);
   background: var(--glass-bg);
   box-shadow:
     0 16px 40px rgba(2, 6, 23, 0.58),
     inset 0 1px 0 rgba(255, 255, 255, 0.16);
-  backdrop-filter: blur(15px);
-  -webkit-backdrop-filter: blur(15px);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   animation: card-in 0.45s ease;
 }
 
 .card {
-  max-height: calc(100vh - 28px);
-  overflow: auto;
+  max-height: 90vh;
+  overflow: hidden;
 }
 
 .loading-screen {
@@ -180,8 +180,8 @@ h2 {
 
 .wizard-screen {
   display: none;
-  border-top: 1px solid rgba(148, 163, 255, 0.22);
-  padding-top: 18px;
+  border-top: 1px solid rgba(148, 163, 255, 0.2);
+  padding-top: 14px;
   animation: step-fade 0.28s ease;
 }
 
@@ -290,9 +290,6 @@ button:disabled {
 }
 
 #roomDisplay,
-#selectedFileName,
-#fileStatusText,
-#fileProgressText,
 #statusText {
   margin: 10px 0 0;
   font-size: 13px;
@@ -318,10 +315,10 @@ button:disabled {
 }
 
 .file-transfer-list {
-  margin-top: 12px;
+  margin-top: 10px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .file-item {
@@ -375,11 +372,24 @@ button:disabled {
   color: #cbd5e1;
 }
 
-#sendControls,
-#receiveInfo {
+#sendControls {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.transfer-screen {
+  min-height: 250px;
+}
+
+.transfer-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.transfer-section {
+  animation: step-fade 0.22s ease;
 }
 
 .spinner {
@@ -418,7 +428,7 @@ button:disabled {
   border-radius: 12px;
   text-align: center;
   cursor: pointer;
-  transition: all 0.3s ease;
+  transition: all 0.25s ease;
 }
 
 .drop-zone .input-label {
@@ -435,7 +445,7 @@ button:disabled {
 }
 
 .file-preview-list {
-  margin-top: 10px;
+  margin-top: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -703,12 +713,27 @@ body:not(.dark-mode) .card {
 body:not(.dark-mode) .subtitle,
 body:not(.dark-mode) .helper-text,
 body:not(.dark-mode) #roomDisplay,
-body:not(.dark-mode) #selectedFileName,
-body:not(.dark-mode) #fileStatusText,
-body:not(.dark-mode) #fileProgressText,
 body:not(.dark-mode) #statusText,
 body:not(.dark-mode) .loading-screen p {
   color: #475569;
+}
+
+@media (max-width: 640px) {
+  body {
+    padding: 16px;
+  }
+
+  .card,
+  .loading-screen {
+    width: 100%;
+    max-width: 100%;
+    padding: 16px;
+    border-radius: 16px;
+  }
+
+  .btn {
+    width: 100%;
+  }
 }
 
 body:not(.dark-mode) .wizard-screen {

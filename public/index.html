@@ -32,8 +32,6 @@
 
     <!-- STEP 0: Entry screen -->
     <div id="entryScreen" class="wizard-screen active">
-      <h2>Choose Mode</h2>
-      <p class="helper-text">How would you like to continue?</p>
       <button id="sendModeBtn" class="btn btn-green">Send File</button>
       <button id="receiveModeBtn" class="btn btn-blue">Receive File</button>
     </div>
@@ -84,38 +82,45 @@
     </div>
 
     <!-- STEP 3 (shared): Connected + transfer -->
-    <div id="transferScreen" class="wizard-screen">
-      <h2 id="transferTitle">Step 3: Connected</h2>
-      <p id="roleStatusText" class="helper-text"></p>
+    <div id="transferScreen" class="wizard-screen transfer-screen" data-ui-state="mode-selection">
+      <h2 id="transferTitle">Send files</h2>
+      <p id="roleStatusText" class="helper-text hidden-block"></p>
 
-      <!-- Visible only in send flow -->
-      <div id="sendControls">
-        <div id="fileInputContainer" class="drop-zone" role="button" tabindex="0" aria-label="Upload files">
-          <label class="input-label" for="fileInput">Drop files here</label>
-          <input id="fileInput" type="file" multiple />
-          <p id="selectedFileName">Drag &amp; drop files or click to browse</p>
+      <div id="sendControls" class="transfer-panel">
+        <div id="connectedPanel" class="transfer-section">
+          <div id="fileInputContainer" class="drop-zone" role="button" tabindex="0" aria-label="Upload files">
+            <label class="input-label" for="fileInput">Drop files here</label>
+            <input id="fileInput" type="file" multiple />
+            <p class="helper-text">Drag &amp; drop files or click to browse</p>
+          </div>
+        </div>
+
+        <div id="previewPanel" class="transfer-section hidden-block">
           <div id="filePreviewList" class="file-preview-list">
             <p class="file-preview-empty">Drag &amp; drop files or click to browse</p>
           </div>
+          <button id="sendFileBtn" class="btn btn-green hidden-block">Send File</button>
         </div>
-        <button id="sendFileBtn" class="btn btn-green">Send File</button>
       </div>
 
-      <!-- Visible only in receive flow -->
-      <div id="receiveInfo" class="hidden-block">
-        <p id="receiveInfoText" class="helper-text">Waiting for sender...</p>
+      <div id="progressPanel" class="transfer-section hidden-block">
+        <div class="state-box">
+          <span class="spinner"></span>
+          <span id="sendingAnimationText">Transferring files...</span>
+        </div>
+        <div id="fileTransferList" class="file-transfer-list hidden-block"></div>
+        <div id="totalProgressTrack" class="progress-track hidden-block">
+          <div id="totalProgressFill" class="progress-fill"></div>
+          <span id="totalProgressValue" class="progress-value">0%</span>
+        </div>
       </div>
 
-      <p id="currentTransferFileText" class="helper-text">Current file: none</p>
-      <div id="fileTransferList" class="file-transfer-list hidden-block"></div>
-      <p id="totalProgressText" class="helper-text">Total progress: 0%</p>
-
-      <p id="fileStatusText">File Status: idle</p>
-      <div class="progress-track">
-        <div id="fileProgressFill" class="progress-fill"></div>
-        <span id="fileProgressValue" class="progress-value">0%</span>
+      <div id="completedPanel" class="transfer-section hidden-block">
+        <div class="state-box">
+          <span id="completionMessage">Completed</span>
+        </div>
+        <button id="resetTransferBtn" class="btn btn-blue" type="button">Reset</button>
       </div>
-      <p id="fileProgressText">Transfer progress: 0%</p>
     </div>
 
     <p id="statusText"></p>
