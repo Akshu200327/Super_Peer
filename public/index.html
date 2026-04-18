@@ -86,6 +86,7 @@
     <!-- STEP 3 (shared): Connected + transfer -->
     <div id="transferScreen" class="wizard-screen">
       <h2 id="transferTitle">Step 3: Connected</h2>
+      <p id="roleStatusText" class="helper-text"></p>
 
       <!-- Visible only in send flow -->
       <div id="sendControls">
@@ -97,7 +98,7 @@
 
       <!-- Visible only in receive flow -->
       <div id="receiveInfo" class="hidden-block">
-        <p class="helper-text">Waiting for sender...</p>
+        <p id="receiveInfoText" class="helper-text">Waiting for sender...</p>
       </div>
 
       <p id="currentTransferFileText" class="helper-text">Current file: none</p>

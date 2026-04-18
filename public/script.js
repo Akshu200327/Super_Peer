@@ -63,8 +63,10 @@ const joinRoomBtn = document.getElementById("joinRoomBtn");
 
 // Transfer controls (shared step 3)
 const transferTitle = document.getElementById("transferTitle");
+const roleStatusText = document.getElementById("roleStatusText");
 const sendControls = document.getElementById("sendControls");
 const receiveInfo = document.getElementById("receiveInfo");
+const receiveInfoText = document.getElementById("receiveInfoText");
 const fileInput = document.getElementById("fileInput");
 const selectedFileName = document.getElementById("selectedFileName");
 const sendFileBtn = document.getElementById("sendFileBtn");
@@ -80,7 +82,7 @@ const totalProgressText = document.getElementById("totalProgressText");
 // APP STATE
 // -----------------------------
 let currentFlow = null; // "send" | "receive"
-let userRole = null; // "sender" | "receiver"
+let userRole = "sender"; // "sender" | "receiver"
 let currentRoomId = null;
 let isCreator = false;
 let isPeerConnected = false;
@@ -195,33 +197,41 @@ function showConnectedStep() {
 
   if (userRole === "sender") {
     transferTitle.textContent = "Step 3: Connected - Send File";
+    if (roleStatusText) {
+      roleStatusText.textContent = "Ready to send files";
+    } else {
+      logMissingElement("roleStatusText");
+    }
     sendControls.classList.remove("hidden-block");
     receiveInfo.classList.add("hidden-block");
-    if (fileInput) {
-      fileInput.disabled = false;
-    } else {
-      logMissingElement("fileInput");
-    }
-    selectedFileName.textContent = "Ready to send files";
-    fileStatusText.textContent = "File Status: Ready to send files";
+    selectedFileName.textContent = "📄 Select a file to start sharing";
     setCurrentTransferFile("Current file: none");
+    if (sendFileBtn) {
+      sendFileBtn.disabled = true;
+    } else {
+      logMissingElement("sendFileBtn");
+    }
   } else {
     transferTitle.textContent = "Step 3: Connected - Ready to Receive";
+    if (roleStatusText) {
+      roleStatusText.textContent = "Waiting to receive files";
+    } else {
+      logMissingElement("roleStatusText");
+    }
     sendControls.classList.add("hidden-block");
     receiveInfo.classList.remove("hidden-block");
-    if (fileInput) {
-      fileInput.disabled = true;
+    if (receiveInfoText) {
+      receiveInfoText.textContent = "Waiting for sender...";
     } else {
-      logMissingElement("fileInput");
+      logMissingElement("receiveInfoText");
     }
-    if (receiveInfo) {
-      receiveInfo.innerHTML = '<p class="helper-text">Waiting for sender...</p>';
-    } else {
-      logMissingElement("receiveInfo");
-    }
-    selectedFileName.textContent = "Waiting to receive files";
-    fileStatusText.textContent = "File Status: Waiting to receive files";
+    selectedFileName.textContent = "Receiving: waiting for file...";
     setCurrentTransferFile("Current file: waiting for sender");
+    if (sendFileBtn) {
+      sendFileBtn.disabled = true;
+    } else {
+      logMissingElement("sendFileBtn");
+    }
   }
 
   statusText.textContent = "";
@@ -231,7 +241,6 @@ function showConnectedStep() {
 function resetTransferUi() {
   if (fileInput) {
     fileInput.value = "";
-    fileInput.disabled = userRole !== "sender";
   } else {
     logMissingElement("fileInput");
   }
@@ -246,25 +255,17 @@ function resetTransferUi() {
   updateTotalProgressText();
   setCurrentTransferFile("Current file: none");
   if (fileStatusText) {
-    if (userRole === "sender") {
-      fileStatusText.textContent = "File Status: Ready to send files";
-    } else if (userRole === "receiver") {
-      fileStatusText.textContent = "File Status: Waiting to receive files";
-    } else {
-      fileStatusText.textContent = "File Status: idle";
-    }
+    fileStatusText.textContent = "File Status: idle";
   } else {
     logMissingElement("fileStatusText");
   }
 
   if (!selectedFileName) {
     logMissingElement("selectedFileName");
-  } else if (userRole === "sender") {
-    selectedFileName.textContent = "Ready to send files";
-  } else if (userRole === "receiver") {
-    selectedFileName.textContent = "Waiting to receive files";
-  } else {
+  } else if (currentFlow === "send") {
     selectedFileName.textContent = "📄 Select a file to start sharing";
+  } else {
+    selectedFileName.textContent = "Receiving: waiting for file...";
   }
 
   updateSendFileButtonState();
@@ -287,7 +288,7 @@ function goToModeSelection() {
   }
 
   currentFlow = null;
-  userRole = null;
+  userRole = "sender";
   currentRoomId = null;
   isCreator = false;
   isPeerConnected = false;
@@ -536,7 +537,12 @@ function updateSendFileButtonState() {
 
   const hasFile = fileInput.files && fileInput.files.length > 0;
   sendFileBtn.disabled =
-    !(userRole === "sender" && hasFile && isPeerConnected) ||
+    !(
+      userRole === "sender" &&
+      currentFlow === "send" &&
+      hasFile &&
+      isPeerConnected
+    ) ||
     isSendingFiles ||
     hasBlockedLargeFile;
 }
@@ -926,7 +932,11 @@ async function sendSingleFile(file, fileIndex, totalFiles) {
 
 async function sendFiles(files) {
   if (userRole !== "sender") {
-    fileStatusText.textContent = "File Status: Waiting to receive files";
+    if (sendFileBtn) {
+      sendFileBtn.disabled = true;
+    } else {
+      logMissingElement("sendFileBtn");
+    }
     return;
   }
 
@@ -989,7 +999,11 @@ async function sendFiles(files) {
 // -----------------------------
 addSafeListener(fileInput, "fileInput", "change", () => {
   if (userRole !== "sender") {
-    updateSendFileButtonState();
+    if (sendFileBtn) {
+      sendFileBtn.disabled = true;
+    } else {
+      logMissingElement("sendFileBtn");
+    }
     return;
   }
 
@@ -1041,9 +1055,6 @@ addSafeListener(fileInput, "fileInput", "change", () => {
 });
 
 addSafeListener(sendFileBtn, "sendFileBtn", "click", async () => {
-  if (userRole !== "sender") {
-    return;
-  }
   await sendFiles(fileInput.files);
 });
 
