@@ -148,6 +148,12 @@ let isRelayRetryInProgress = false;
 let isRelayConnection = false;
 let useFastServerMode = false;
 let hybridFallbackTriggered = false;
+const MAX_ICE_RESTART_ATTEMPTS = 2;
+const ICE_FAILURE_STABILIZE_DELAY_MS = 2500;
+let iceRestartAttempts = 0;
+let iceFailureDelayTimer = null;
+let hasLocalPeerJoined = false;
+let hasRemotePeerJoined = false;
 const HYBRID_SPEED_THRESHOLD = 300 * 1024; // 300 KB/s
 const HYBRID_SPEED_SAMPLE_SECONDS = 5;
 
@@ -313,6 +319,7 @@ function resetTransferUi() {
 function goToModeSelection() {
   stopWaitingDots();
   clearConnectionTimeout();
+  clearIceFailureDelay();
   hideConnectionFailure();
 
   if (dataChannel) {
@@ -330,12 +337,15 @@ function goToModeSelection() {
   currentRoomId = null;
   isCreator = false;
   isPeerConnected = false;
+  iceRestartAttempts = 0;
   isRelayConnection = false;
   relayRetryAttempted = false;
   relayFallbackEnabled = false;
   isRelayRetryInProgress = false;
   useFastServerMode = false;
   hybridFallbackTriggered = false;
+  hasLocalPeerJoined = false;
+  hasRemotePeerJoined = false;
   incomingFileInfo = null;
   receivedChunks = [];
   receivedBytes = 0;
@@ -358,9 +368,79 @@ function clearConnectionTimeout() {
   connectionTimeoutTimer = null;
 }
 
+function clearIceFailureDelay() {
+  if (!iceFailureDelayTimer) return;
+  clearTimeout(iceFailureDelayTimer);
+  iceFailureDelayTimer = null;
+}
+
+async function attemptIceRestart(reason) {
+  if (!peerConnection || !currentRoomId || !isCreator) {
+    return false;
+  }
+  if (iceRestartAttempts >= MAX_ICE_RESTART_ATTEMPTS) {
+    return false;
+  }
+  if (
+    peerConnection.signalingState !== "stable" &&
+    peerConnection.signalingState !== "have-local-offer"
+  ) {
+    console.log("Skipping ICE restart due to signaling state:", peerConnection.signalingState);
+    return false;
+  }
+
+  iceRestartAttempts += 1;
+  console.log(`ICE restart attempt ${iceRestartAttempts}/${MAX_ICE_RESTART_ATTEMPTS} (${reason})`);
+  try {
+    const offer = await peerConnection.createOffer({ iceRestart: true });
+    await peerConnection.setLocalDescription(offer);
+    socket.emit("offer", {
+      roomId: currentRoomId,
+      offer: offer
+    });
+    startConnectionTimeout();
+    return true;
+  } catch (error) {
+    console.warn("ICE restart failed:", error.message);
+    return false;
+  }
+}
+
+async function scheduleFailureHandling(reason) {
+  clearIceFailureDelay();
+  iceFailureDelayTimer = setTimeout(async () => {
+    iceFailureDelayTimer = null;
+    if (!peerConnection) return;
+    const iceState = peerConnection.iceConnectionState;
+    const connectionState = peerConnection.connectionState;
+    if (
+      iceState !== "failed" &&
+      iceState !== "disconnected" &&
+      connectionState !== "failed" &&
+      connectionState !== "disconnected"
+    ) {
+      return;
+    }
+
+    const restarted = await attemptIceRestart(reason);
+    if (restarted) {
+      return;
+    }
+
+    const retried = await retryConnectionViaRelay(reason);
+    if (!retried && !isRelayRetryInProgress) {
+      showConnectionFailure(CONNECTION_INTERRUPTED_MESSAGE);
+    }
+  }, ICE_FAILURE_STABILIZE_DELAY_MS);
+}
+
 function startConnectionTimeout() {
   clearConnectionTimeout();
   connectionTimeoutTimer = setTimeout(async () => {
+    const restarted = await attemptIceRestart("timeout");
+    if (restarted) {
+      return;
+    }
     const retried = await retryConnectionViaRelay("timeout");
     if (!retried) {
       showConnectionFailure(CONNECTION_INTERRUPTED_MESSAGE);
@@ -378,6 +458,7 @@ function hideConnectionFailure() {
 
 function showConnectionFailure(message) {
   clearConnectionTimeout();
+  clearIceFailureDelay();
   isPeerConnected = false;
   setCreateRoomButtonDisabled(false);
   setJoinRoomButtonDisabled(false);
@@ -1108,6 +1189,7 @@ function setJoinRoomButtonDisabled(disabled) {
 // WEBRTC + DATACHANNEL
 // -----------------------------
 async function createPeerConnection() {
+  clearIceFailureDelay();
   const iceServers = await getIceServers();
   const transportPolicy = FORCE_RELAY_ONLY || relayFallbackEnabled ? "relay" : "all";
   peerConnection = new RTCPeerConnection({
@@ -1144,15 +1226,18 @@ async function createPeerConnection() {
       peerConnection.iceConnectionState === "connected" ||
       peerConnection.iceConnectionState === "completed"
     ) {
+      clearIceFailureDelay();
+      iceRestartAttempts = 0;
       isRelayConnection = await warnIfTurnRelayNotUsed(peerConnection);
       return;
     }
 
-    if (peerConnection.iceConnectionState === "failed") {
-      const retried = await retryConnectionViaRelay("ice-failed");
-      if (!retried) {
-        showConnectionFailure(CONNECTION_INTERRUPTED_MESSAGE);
-      }
+    if (
+      peerConnection.iceConnectionState === "failed" ||
+      peerConnection.iceConnectionState === "disconnected"
+    ) {
+      console.log("ICE unstable state detected:", peerConnection.iceConnectionState);
+      await scheduleFailureHandling(`ice-${peerConnection.iceConnectionState}`);
     }
   };
 
@@ -1161,6 +1246,8 @@ async function createPeerConnection() {
     if (peerConnection.connectionState === "connected") {
       isPeerConnected = true;
       clearConnectionTimeout();
+      clearIceFailureDelay();
+      iceRestartAttempts = 0;
       isRelayConnection = await warnIfTurnRelayNotUsed(peerConnection);
       showConnectedStep();
       showToast("Secure connection established", "success");
@@ -1170,15 +1257,14 @@ async function createPeerConnection() {
 
     if (
       peerConnection.connectionState === "failed" ||
-      peerConnection.connectionState === "disconnected" ||
-      peerConnection.connectionState === "closed"
+      peerConnection.connectionState === "disconnected"
     ) {
-      if (peerConnection.connectionState === "failed") {
-        const retried = await retryConnectionViaRelay("connection-failed");
-        if (retried) {
-          return;
-        }
-      }
+      console.log("Connection unstable state detected:", peerConnection.connectionState);
+      await scheduleFailureHandling(`connection-${peerConnection.connectionState}`);
+      return;
+    }
+
+    if (peerConnection.connectionState === "closed") {
       if (!isRelayRetryInProgress) {
         showConnectionFailure(CONNECTION_INTERRUPTED_MESSAGE);
       }
@@ -1410,6 +1496,10 @@ addSafeListener(sendModeBtn, "sendModeBtn", "click", () => {
   isCreator = true;
   currentRoomId = null;
   retryRoomId = null;
+  clearIceFailureDelay();
+  iceRestartAttempts = 0;
+  hasLocalPeerJoined = false;
+  hasRemotePeerJoined = false;
   relayRetryAttempted = false;
   relayFallbackEnabled = false;
   isRelayRetryInProgress = false;
@@ -1433,6 +1523,10 @@ addSafeListener(receiveModeBtn, "receiveModeBtn", "click", () => {
   isCreator = false;
   currentRoomId = null;
   retryRoomId = null;
+  clearIceFailureDelay();
+  iceRestartAttempts = 0;
+  hasLocalPeerJoined = false;
+  hasRemotePeerJoined = false;
   relayRetryAttempted = false;
   relayFallbackEnabled = false;
   isRelayRetryInProgress = false;
@@ -1909,6 +2003,8 @@ socket.on("connect_error", (err) => {
 socket.on("room-created", (roomId) => {
   currentRoomId = roomId;
   retryRoomId = roomId;
+  hasLocalPeerJoined = true;
+  hasRemotePeerJoined = false;
   roomDisplay.innerHTML = `Room ID: <strong>${roomId}</strong>`;
   waitingRoomDisplay.innerHTML = `Room ID: <strong>${roomId}</strong>`;
   copyRoomBtn.disabled = false;
@@ -1924,6 +2020,7 @@ socket.on("room-created", (roomId) => {
 socket.on("joined-room", (roomId) => {
   currentRoomId = roomId;
   retryRoomId = roomId;
+  hasLocalPeerJoined = true;
   setJoinRoomButtonDisabled(true);
   hideConnectionFailure();
   startConnectionTimeout();
@@ -1933,6 +2030,9 @@ socket.on("joined-room", (roomId) => {
 socket.on("peer-joined", async () => {
   // Only creator sends offer
   if (!isCreator) return;
+  hasRemotePeerJoined = true;
+  if (!hasLocalPeerJoined || !hasRemotePeerJoined) return;
+  await new Promise((resolve) => setTimeout(resolve, 250));
 
   await createPeerConnection();
 
@@ -1950,6 +2050,7 @@ socket.on("peer-joined", async () => {
 });
 
 socket.on("offer", async (offer) => {
+  hasRemotePeerJoined = true;
   if (
     !peerConnection ||
     peerConnection.connectionState === "failed" ||
@@ -1979,6 +2080,7 @@ socket.on("offer", async (offer) => {
 socket.on("answer", async (answer) => {
   if (!peerConnection) return;
   await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+  clearIceFailureDelay();
 });
 
 socket.on("ice-candidate", async (candidate) => {
@@ -2001,9 +2103,12 @@ socket.on("error-message", (message) => {
 
 addSafeListener(retryConnectionBtn, "retryConnectionBtn", "click", () => {
   clearConnectionTimeout();
+  clearIceFailureDelay();
   hideConnectionFailure();
   setInlineStatus(RELAY_RETRY_UI_MESSAGE);
   showToast(RELAY_RETRY_UI_MESSAGE, "info");
+  iceRestartAttempts = 0;
+  hasRemotePeerJoined = false;
   relayRetryAttempted = false;
   relayFallbackEnabled = false;
   isRelayRetryInProgress = false;
