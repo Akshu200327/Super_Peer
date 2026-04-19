@@ -91,10 +91,12 @@ let currentFlow = null; // "send" | "receive"
 let userRole = "sender"; // "sender" | "receiver"
 let currentRoomId = null;
 let isCreator = false;
+let isOfferer = false;
 let isPeerConnected = false;
 
 let peerConnection = null;
 let dataChannel = null;
+let pendingCandidates = [];
 
 // File transfer state (simple one-file flow)
 const CHUNK_SIZE = 64 * 1024; // 64KB
@@ -149,13 +151,15 @@ let isRelayConnection = false;
 let useFastServerMode = false;
 let hybridFallbackTriggered = false;
 const MAX_ICE_RESTART_ATTEMPTS = 2;
-const ICE_FAILURE_STABILIZE_DELAY_MS = 2500;
+const ICE_FAILURE_STABILIZE_DELAY_MS = 3000;
 let iceRestartAttempts = 0;
 let iceFailureDelayTimer = null;
+let connectionFailureDelayTimer = null;
 let hasLocalPeerJoined = false;
 let hasRemotePeerJoined = false;
 const HYBRID_SPEED_THRESHOLD = 300 * 1024; // 300 KB/s
 const HYBRID_SPEED_SAMPLE_SECONDS = 5;
+const CONNECTION_FAILURE_GRACE_MS = 3000;
 
 async function getIceServers() {
   try {
@@ -320,6 +324,7 @@ function goToModeSelection() {
   stopWaitingDots();
   clearConnectionTimeout();
   clearIceFailureDelay();
+  clearConnectionFailureDelay();
   hideConnectionFailure();
 
   if (dataChannel) {
@@ -335,7 +340,7 @@ function goToModeSelection() {
   currentFlow = null;
   userRole = "sender";
   currentRoomId = null;
-  isCreator = false;
+  setSignalingRole(false);
   isPeerConnected = false;
   iceRestartAttempts = 0;
   isRelayConnection = false;
@@ -349,6 +354,7 @@ function goToModeSelection() {
   incomingFileInfo = null;
   receivedChunks = [];
   receivedBytes = 0;
+  clearPendingCandidates();
 
   roomDisplay.innerHTML = "Room ID: <strong>Not created yet</strong>";
   waitingRoomDisplay.innerHTML = "Room ID: <strong>Not created yet</strong>";
@@ -374,8 +380,76 @@ function clearIceFailureDelay() {
   iceFailureDelayTimer = null;
 }
 
+function clearConnectionFailureDelay() {
+  if (!connectionFailureDelayTimer) return;
+  clearTimeout(connectionFailureDelayTimer);
+  connectionFailureDelayTimer = null;
+}
+
+function setSignalingRole(offerer) {
+  isOfferer = offerer;
+  isCreator = offerer;
+  console.log(`Role: ${offerer ? "OFFERER" : "ANSWERER"}`);
+}
+
+function clearPendingCandidates() {
+  pendingCandidates = [];
+}
+
+async function flushPendingCandidates() {
+  if (
+    !peerConnection ||
+    !peerConnection.remoteDescription ||
+    !peerConnection.remoteDescription.type ||
+    pendingCandidates.length === 0
+  ) {
+    return;
+  }
+
+  const queuedCandidates = [...pendingCandidates];
+  pendingCandidates = [];
+  for (const candidate of queuedCandidates) {
+    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+  }
+}
+
+async function createAndSendOffer({ iceRestart = false } = {}) {
+  if (!peerConnection || !currentRoomId || !isOfferer) {
+    return false;
+  }
+
+  if (!dataChannel || dataChannel.readyState === "closed" || dataChannel.readyState === "closing") {
+    dataChannel = peerConnection.createDataChannel("file", DATA_CHANNEL_CONFIG);
+    setupDataChannelEvents(dataChannel);
+  }
+
+  const offer = await peerConnection.createOffer(iceRestart ? { iceRestart: true } : undefined);
+  await peerConnection.setLocalDescription(offer);
+  socket.emit("offer", {
+    roomId: currentRoomId,
+    offer: offer
+  });
+  return true;
+}
+
+function scheduleConnectionFailure(message = CONNECTION_INTERRUPTED_MESSAGE) {
+  clearConnectionFailureDelay();
+  connectionFailureDelayTimer = setTimeout(() => {
+    connectionFailureDelayTimer = null;
+    if (
+      peerConnection &&
+      (peerConnection.connectionState === "connected" ||
+        peerConnection.iceConnectionState === "connected" ||
+        peerConnection.iceConnectionState === "completed")
+    ) {
+      return;
+    }
+    showConnectionFailure(message);
+  }, CONNECTION_FAILURE_GRACE_MS);
+}
+
 async function attemptIceRestart(reason) {
-  if (!peerConnection || !currentRoomId || !isCreator) {
+  if (!peerConnection || !currentRoomId || !isOfferer) {
     return false;
   }
   if (iceRestartAttempts >= MAX_ICE_RESTART_ATTEMPTS) {
@@ -392,12 +466,7 @@ async function attemptIceRestart(reason) {
   iceRestartAttempts += 1;
   console.log(`ICE restart attempt ${iceRestartAttempts}/${MAX_ICE_RESTART_ATTEMPTS} (${reason})`);
   try {
-    const offer = await peerConnection.createOffer({ iceRestart: true });
-    await peerConnection.setLocalDescription(offer);
-    socket.emit("offer", {
-      roomId: currentRoomId,
-      offer: offer
-    });
+    await createAndSendOffer({ iceRestart: true });
     startConnectionTimeout();
     return true;
   } catch (error) {
@@ -429,7 +498,7 @@ async function scheduleFailureHandling(reason) {
 
     const retried = await retryConnectionViaRelay(reason);
     if (!retried && !isRelayRetryInProgress) {
-      showConnectionFailure(CONNECTION_INTERRUPTED_MESSAGE);
+      scheduleConnectionFailure(CONNECTION_INTERRUPTED_MESSAGE);
     }
   }, ICE_FAILURE_STABILIZE_DELAY_MS);
 }
@@ -443,12 +512,13 @@ function startConnectionTimeout() {
     }
     const retried = await retryConnectionViaRelay("timeout");
     if (!retried) {
-      showConnectionFailure(CONNECTION_INTERRUPTED_MESSAGE);
+      scheduleConnectionFailure(CONNECTION_INTERRUPTED_MESSAGE);
     }
   }, 8000);
 }
 
 function hideConnectionFailure() {
+  clearConnectionFailureDelay();
   if (connectionErrorBox) {
     connectionErrorBox.classList.add("hidden-block");
   } else {
@@ -457,6 +527,7 @@ function hideConnectionFailure() {
 }
 
 function showConnectionFailure(message) {
+  clearConnectionFailureDelay();
   clearConnectionTimeout();
   clearIceFailureDelay();
   isPeerConnected = false;
@@ -1121,6 +1192,7 @@ async function retryConnectionViaRelay(reason) {
   relayRetryAttempted = true;
   relayFallbackEnabled = true;
   isRelayRetryInProgress = true;
+  clearPendingCandidates();
   clearConnectionTimeout();
   setTransferActivity(HYBRID_STABILIZE_MESSAGE);
   showToast(RELAY_RETRY_UI_MESSAGE, "info");
@@ -1147,15 +1219,8 @@ async function retryConnectionViaRelay(reason) {
 
     await createPeerConnection();
 
-    if (isCreator) {
-      dataChannel = peerConnection.createDataChannel("file", DATA_CHANNEL_CONFIG);
-      setupDataChannelEvents(dataChannel);
-      const offer = await peerConnection.createOffer();
-      await peerConnection.setLocalDescription(offer);
-      socket.emit("offer", {
-        roomId: currentRoomId,
-        offer: offer
-      });
+    if (isOfferer) {
+      await createAndSendOffer();
     }
 
     startConnectionTimeout();
@@ -1190,6 +1255,7 @@ function setJoinRoomButtonDisabled(disabled) {
 // -----------------------------
 async function createPeerConnection() {
   clearIceFailureDelay();
+  clearConnectionFailureDelay();
   const iceServers = await getIceServers();
   const transportPolicy = FORCE_RELAY_ONLY || relayFallbackEnabled ? "relay" : "all";
   peerConnection = new RTCPeerConnection({
@@ -1200,7 +1266,7 @@ async function createPeerConnection() {
   isRelayConnection = false;
   console.log("ICE transport policy:", transportPolicy);
 
-  // Receiver gets data channel from sender
+  // Answerer receives data channel from offerer
   peerConnection.ondatachannel = (event) => {
     dataChannel = event.channel;
     setupDataChannelEvents(dataChannel);
@@ -1227,6 +1293,7 @@ async function createPeerConnection() {
       peerConnection.iceConnectionState === "completed"
     ) {
       clearIceFailureDelay();
+      clearConnectionFailureDelay();
       iceRestartAttempts = 0;
       isRelayConnection = await warnIfTurnRelayNotUsed(peerConnection);
       return;
@@ -1247,6 +1314,7 @@ async function createPeerConnection() {
       isPeerConnected = true;
       clearConnectionTimeout();
       clearIceFailureDelay();
+      clearConnectionFailureDelay();
       iceRestartAttempts = 0;
       isRelayConnection = await warnIfTurnRelayNotUsed(peerConnection);
       showConnectedStep();
@@ -1266,7 +1334,7 @@ async function createPeerConnection() {
 
     if (peerConnection.connectionState === "closed") {
       if (!isRelayRetryInProgress) {
-        showConnectionFailure(CONNECTION_INTERRUPTED_MESSAGE);
+        scheduleConnectionFailure(CONNECTION_INTERRUPTED_MESSAGE);
       }
     }
   };
@@ -1493,11 +1561,13 @@ addSafeListener(sendModeBtn, "sendModeBtn", "click", () => {
   currentFlow = "send";
   userRole = "sender";
   updateRoleUI();
-  isCreator = true;
+  setSignalingRole(true);
   currentRoomId = null;
   retryRoomId = null;
   clearIceFailureDelay();
+  clearConnectionFailureDelay();
   iceRestartAttempts = 0;
+  clearPendingCandidates();
   hasLocalPeerJoined = false;
   hasRemotePeerJoined = false;
   relayRetryAttempted = false;
@@ -1520,11 +1590,13 @@ addSafeListener(receiveModeBtn, "receiveModeBtn", "click", () => {
   currentFlow = "receive";
   userRole = "receiver";
   updateRoleUI();
-  isCreator = false;
+  setSignalingRole(false);
   currentRoomId = null;
   retryRoomId = null;
   clearIceFailureDelay();
+  clearConnectionFailureDelay();
   iceRestartAttempts = 0;
+  clearPendingCandidates();
   hasLocalPeerJoined = false;
   hasRemotePeerJoined = false;
   relayRetryAttempted = false;
@@ -1544,6 +1616,8 @@ addSafeListener(receiveModeBtn, "receiveModeBtn", "click", () => {
 // SEND FLOW
 // -----------------------------
 addSafeListener(createRoomBtn, "createRoomBtn", "click", () => {
+  setSignalingRole(true);
+  clearPendingCandidates();
   setCreateRoomButtonDisabled(true);
   socket.emit("create-room");
 });
@@ -1584,6 +1658,8 @@ addSafeListener(joinRoomBtn, "joinRoomBtn", "click", () => {
   }
 
   retryRoomId = roomId;
+  setSignalingRole(false);
+  clearPendingCandidates();
   setJoinRoomButtonDisabled(true);
   hideConnectionFailure();
   startConnectionTimeout();
@@ -2003,6 +2079,8 @@ socket.on("connect_error", (err) => {
 socket.on("room-created", (roomId) => {
   currentRoomId = roomId;
   retryRoomId = roomId;
+  setSignalingRole(true);
+  clearPendingCandidates();
   hasLocalPeerJoined = true;
   hasRemotePeerJoined = false;
   roomDisplay.innerHTML = `Room ID: <strong>${roomId}</strong>`;
@@ -2020,6 +2098,8 @@ socket.on("room-created", (roomId) => {
 socket.on("joined-room", (roomId) => {
   currentRoomId = roomId;
   retryRoomId = roomId;
+  setSignalingRole(false);
+  clearPendingCandidates();
   hasLocalPeerJoined = true;
   setJoinRoomButtonDisabled(true);
   hideConnectionFailure();
@@ -2028,25 +2108,14 @@ socket.on("joined-room", (roomId) => {
 });
 
 socket.on("peer-joined", async () => {
-  // Only creator sends offer
-  if (!isCreator) return;
+  // Offerer sends offer
+  if (!isOfferer) return;
   hasRemotePeerJoined = true;
   if (!hasLocalPeerJoined || !hasRemotePeerJoined) return;
   await new Promise((resolve) => setTimeout(resolve, 250));
 
   await createPeerConnection();
-
-  // Sender creates DataChannel
-  dataChannel = peerConnection.createDataChannel("file", DATA_CHANNEL_CONFIG);
-  setupDataChannelEvents(dataChannel);
-
-  const offer = await peerConnection.createOffer();
-  await peerConnection.setLocalDescription(offer);
-
-  socket.emit("offer", {
-    roomId: currentRoomId,
-    offer: offer
-  });
+  await createAndSendOffer();
 });
 
 socket.on("offer", async (offer) => {
@@ -2068,6 +2137,7 @@ socket.on("offer", async (offer) => {
   }
 
   await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+  await flushPendingCandidates();
   const answer = await peerConnection.createAnswer();
   await peerConnection.setLocalDescription(answer);
 
@@ -2080,15 +2150,23 @@ socket.on("offer", async (offer) => {
 socket.on("answer", async (answer) => {
   if (!peerConnection) return;
   await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+  await flushPendingCandidates();
   clearIceFailureDelay();
 });
 
 socket.on("ice-candidate", async (candidate) => {
-  if (!peerConnection) return;
-  if (candidate && candidate.candidate) {
-    if (String(candidate.candidate).includes(" typ relay ")) {
-      hasRelayCandidateSeen = true;
-    }
+  console.log("Candidate received");
+  if (!candidate) return;
+  if (candidate.candidate && String(candidate.candidate).includes(" typ relay ")) {
+    hasRelayCandidateSeen = true;
+  }
+  if (
+    !peerConnection ||
+    !peerConnection.remoteDescription ||
+    !peerConnection.remoteDescription.type
+  ) {
+    pendingCandidates.push(candidate);
+    return;
   }
   await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
 });
@@ -2108,6 +2186,7 @@ addSafeListener(retryConnectionBtn, "retryConnectionBtn", "click", () => {
   setInlineStatus(RELAY_RETRY_UI_MESSAGE);
   showToast(RELAY_RETRY_UI_MESSAGE, "info");
   iceRestartAttempts = 0;
+  clearPendingCandidates();
   hasRemotePeerJoined = false;
   relayRetryAttempted = false;
   relayFallbackEnabled = false;
@@ -2124,6 +2203,7 @@ addSafeListener(retryConnectionBtn, "retryConnectionBtn", "click", () => {
   }
 
   if (currentFlow === "receive" && retryRoomId) {
+    setSignalingRole(false);
     showScreen(receiveConnectingScreen);
     statusText.textContent = "";
     setJoinRoomButtonDisabled(true);
@@ -2133,6 +2213,7 @@ addSafeListener(retryConnectionBtn, "retryConnectionBtn", "click", () => {
   }
 
   if (currentFlow === "send") {
+    setSignalingRole(true);
     showScreen(sendCreateScreen);
     statusText.textContent = "";
     setCreateRoomButtonDisabled(true);

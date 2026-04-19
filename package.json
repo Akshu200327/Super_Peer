@@ -4,11 +4,16 @@
   "description": "SuperPeer - beginner-friendly P2P setup with WebRTC + Socket.IO",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "cross-env NODE_ENV=development node server.js"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3"
   },
   "dependencies": {
     "dotenv": "^16.6.1",
     "express": "^4.21.2",
+    "open": "^11.0.0",
     "socket.io": "^4.8.1",
     "twilio": "^5.13.1"
   }

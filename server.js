@@ -1,3 +1,4 @@
+const open = require("open");
 require("dotenv").config();
 
 // Step 1: Import required packages
@@ -208,6 +209,15 @@ io.on("connection", (socket) => {
 
 // Step 8: Start server (Render provides PORT through environment variable)
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Server running on ${PORT}`);
+server.listen(PORT, async () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+  console.log("ENV:", process.env.NODE_ENV);
+
+  if (process.env.NODE_ENV === "development") {
+    try {
+      await open(`http://localhost:${PORT}`);
+    } catch (err) {
+      console.log("Auto open skipped");
+    }
+  }
 });
