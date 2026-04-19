@@ -425,6 +425,7 @@ async function createAndSendOffer({ iceRestart = false } = {}) {
 
   const offer = await peerConnection.createOffer(iceRestart ? { iceRestart: true } : undefined);
   await peerConnection.setLocalDescription(offer);
+  console.log("Sending offer");
   socket.emit("offer", {
     roomId: currentRoomId,
     offer: offer
@@ -1254,6 +1255,11 @@ function setJoinRoomButtonDisabled(disabled) {
 // WEBRTC + DATACHANNEL
 // -----------------------------
 async function createPeerConnection() {
+  if (peerConnection) {
+    console.log("PeerConnection already exists");
+    return;
+  }
+  console.log("Creating peer connection");
   clearIceFailureDelay();
   clearConnectionFailureDelay();
   const iceServers = await getIceServers();
@@ -2108,31 +2114,19 @@ socket.on("joined-room", (roomId) => {
 });
 
 socket.on("peer-joined", async () => {
-  // Offerer sends offer
   if (!isOfferer) return;
+  console.log("Peer joined → creating offer");
   hasRemotePeerJoined = true;
-  if (!hasLocalPeerJoined || !hasRemotePeerJoined) return;
-  await new Promise((resolve) => setTimeout(resolve, 250));
-
-  await createPeerConnection();
+  if (!peerConnection) {
+    await createPeerConnection();
+  }
   await createAndSendOffer();
 });
 
 socket.on("offer", async (offer) => {
+  console.log("Offer received");
   hasRemotePeerJoined = true;
-  if (
-    !peerConnection ||
-    peerConnection.connectionState === "failed" ||
-    peerConnection.connectionState === "closed"
-  ) {
-    if (peerConnection) {
-      try {
-        peerConnection.close();
-      } catch (error) {
-        console.warn("Peer connection reset before handling offer failed:", error.message);
-      }
-      peerConnection = null;
-    }
+  if (!peerConnection) {
     await createPeerConnection();
   }
 
@@ -2145,6 +2139,7 @@ socket.on("offer", async (offer) => {
     roomId: currentRoomId,
     answer: answer
   });
+  console.log("Answer sent");
 });
 
 socket.on("answer", async (answer) => {
